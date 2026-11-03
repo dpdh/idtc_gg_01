@@ -1,0 +1,31 @@
+{
+  "expo": {
+    "name": "TWINI",
+    "slug": "twini",
+    "version": "1.0.0",
+    "orientation": "default",
+    "icon": "./src/assets/twini-logo.png",
+    "ios": {
+      "bundleIdentifier": "com.twini.app",
+      "supportsTablet": true
+    },
+    "android": {
+      "package": "com.twini.app"
+    },
+    "web": {
+      "bundler": "metro",
+      "favicon": "./src/assets/twini-logo.png"
+    },
+    "plugins": [
+      [
+        "expo-splash-screen",
+        {
+          "image": "./src/assets/twini-logo.png",
+          "resizeMode": "contain",
+          "backgroundColor": "#090f1b"
+        }
+      ],
+      "expo-secure-store"
+    ]
+  }
+}
