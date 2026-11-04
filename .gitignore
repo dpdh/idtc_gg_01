@@ -1,0 +1,18 @@
+node_modules
+
+# Build outputs
+android/app/build/
+ios/build/
+dist/
+.expo/
+
+# IDE
+.vscode/
+*.DS_Store
+
+# Watchman
+.watchmanconfig
+
+# Platform native dirs (large binaries)
+android/
+ios/
