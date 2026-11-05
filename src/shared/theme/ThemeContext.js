@@ -56,10 +56,6 @@ export function ThemeProvider({ children }) {
     [theme, themeId, setThemeId, isReady, spacing, radii],
   );
 
-  if (!isReady) {
-    return null;
-  }
-
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;
 }
 

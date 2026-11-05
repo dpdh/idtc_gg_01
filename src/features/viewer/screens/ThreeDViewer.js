@@ -5,7 +5,6 @@ import {
   StyleSheet,
   TouchableOpacity,
   StatusBar,
-  useWindowDimensions,
   Platform,
 } from 'react-native';
 import { Canvas, useFrame } from '@react-three/fiber';
@@ -51,31 +50,23 @@ function LoadingModel() {
   );
 }
 
-function PerfOverlay({ fps }) {
-  return (
-    <View style={styles.perfOverlay}>
-      <Text style={styles.perfText}>FPS: {fps}</Text>
-    </View>
-  );
-}
-
 export default function ThreeDViewer({ navigation, route }) {
   const insets = useSafeAreaInsets();
   const { width, height } = useWindowDimensions();
   const model = route?.params?.model ?? glbModels[0];
   const isIOS = Platform.OS === 'ios';
 
-  const dpr = isIOS ? [1, 2, 3] : [1, 1.5, 2];
+  const dpr = isIOS ? [1, 2] : [1, 1.5];
 
   const frameCountRef = useRef(0);
   const lastTimeRef = useRef(0);
-  const [fpsState, setFpsState] = useState(0);
+  const fpsRef = useRef(0);
 
   const calcFps = useCallback(() => {
     const now = performance.now();
     frameCountRef.current += 1;
     if (now - lastTimeRef.current >= 1000) {
-      setFpsState(frameCountRef.current);
+      fpsRef.current = frameCountRef.current;
       frameCountRef.current = 0;
       lastTimeRef.current = now;
     }
@@ -127,8 +118,6 @@ export default function ThreeDViewer({ navigation, route }) {
           calcFps();
         }} />
       </Canvas>
-
-      <PerfOverlay fps={fpsState} />
 
       <View style={[styles.topOverlay, { paddingTop: Math.max(insets.top, 14) }]}>
         <TouchableOpacity
