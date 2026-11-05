@@ -5,9 +5,8 @@ import {
   StyleSheet,
   TouchableOpacity,
   StatusBar,
-  Platform,
 } from 'react-native';
-import { Canvas, useFrame } from '@react-three/fiber';
+import { Canvas } from '@react-three/fiber';
 import { Bounds } from '@react-three/drei/core/Bounds';
 import { Center } from '@react-three/drei/core/Center';
 import { OrbitControls } from '@react-three/drei/core/OrbitControls';
@@ -16,7 +15,6 @@ import { useGLTF } from '@react-three/drei/core/Gltf';
 import { Asset } from 'expo-asset';
 import { FontAwesomeIcon } from '@fortawesome/react-native-fontawesome';
 import { faArrowLeft, faRotate, faExpand } from '@fortawesome/free-solid-svg-icons';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import glbModels from '../../library/data/glbModels';
 
 function GlbModel({ source, uri }) {
@@ -52,25 +50,13 @@ function LoadingModel() {
 
 export default function ThreeDViewer({ navigation, route }) {
   const insets = useSafeAreaInsets();
-  const { width, height } = useWindowDimensions();
   const model = route?.params?.model ?? glbModels[0];
-  const isIOS = Platform.OS === 'ios';
 
-  const dpr = isIOS ? [1, 2] : [1, 1.5];
+  // Fixed DPR - retina devices use 2, others use 1
+  const dpr = 2;
 
   const frameCountRef = useRef(0);
   const lastTimeRef = useRef(0);
-  const fpsRef = useRef(0);
-
-  const calcFps = useCallback(() => {
-    const now = performance.now();
-    frameCountRef.current += 1;
-    if (now - lastTimeRef.current >= 1000) {
-      fpsRef.current = frameCountRef.current;
-      frameCountRef.current = 0;
-      lastTimeRef.current = now;
-    }
-  }, []);
 
   const [cameraPos, setCameraPos] = useState([0, 1.6, 4.5]);
   const [camFov, setCamFov] = useState(45);
@@ -109,14 +95,11 @@ export default function ThreeDViewer({ navigation, route }) {
         <OrbitControls
           makeDefault
           enableDamping
-          minDistance={0.8}
-          maxDistance={22}
+          minDistance={1}
+          maxDistance={20}
           minPolarAngle={0}
           maxPolarAngle={Math.PI}
-        />
-        <useFrame={(state) => {
-          calcFps();
-        }} />
+/>
       </Canvas>
 
       <View style={[styles.topOverlay, { paddingTop: Math.max(insets.top, 14) }]}>
@@ -132,17 +115,6 @@ export default function ThreeDViewer({ navigation, route }) {
           <Text style={styles.eyebrow}>GLB MODEL</Text>
           <Text numberOfLines={1} style={styles.title}>{model.name}</Text>
         </View>
-        <TouchableOpacity
-          onPress={() => {
-            setCameraPos([0, 2, 5]);
-            setCamFov(45);
-          }}
-          style={styles.resetButton}
-          accessibilityRole="button"
-          accessibilityLabel="Reset camera to full body view"
-        >
-          <FontAwesomeIcon icon={faExpand} size={14} color="#8fc2ff" />
-        </TouchableOpacity>
       </View>
 
       <View
@@ -161,24 +133,6 @@ export default function ThreeDViewer({ navigation, route }) {
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#090f1b', overflow: 'hidden' },
-  perfOverlay: {
-    position: 'absolute',
-    top: 54,
-    right: 14,
-    backgroundColor: 'rgba(0,0,0,0.55)',
-    borderRadius: 8,
-    paddingHorizontal: 8,
-    paddingVertical: 5,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.12)',
-    zIndex: 100,
-  },
-  perfText: {
-    color: '#4ade80',
-    fontSize: 10,
-    fontWeight: '700',
-    fontFamily: Platform.OS === 'ios' ? 'Courier New' : 'monospace',
-  },
   topOverlay: {
     position: 'absolute',
     top: 0,
