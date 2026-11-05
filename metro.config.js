@@ -2,7 +2,7 @@ const { getDefaultConfig } = require('expo/metro-config');
 const path = require('path');
 
 const config = getDefaultConfig(__dirname);
-config.resolver.assetExts.push('glb');
+config.resolver.assetExts.push('glb', 'obj', 'mtl');
 
 const threeModulePath = path.join(__dirname, 'node_modules/three/build/three.module.js');
 const resolveRequest = config.resolver.resolveRequest;

@@ -1,15 +1,21 @@
 import React, { Suspense, useEffect, useMemo, useRef, useState } from 'react';
-import { Canvas, useFrame } from '@react-three/fiber';
+import { Canvas, useFrame, useLoader } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei/core/OrbitControls';
 import { useAnimations } from '@react-three/drei/core/useAnimations';
 import { useGLTF } from '@react-three/drei/core/Gltf';
 import { Asset } from 'expo-asset';
 import { SkeletonUtils } from 'three-stdlib';
+import { MTLLoader } from 'three/examples/jsm/loaders/MTLLoader.js';
+import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { MONAS_MAP_DATA } from '../data/monasMap';
 const pickupPoints = [[2, -3], [-4, 4], [7, 0], [-7, -5], [5, 6], [-2, -7], [8, 5], [-8, 0], [3, 8], [-6, 7]];
 const sensorPoints = [[1, 4], [-5, 0], [4, -2]];
 
-function Monas() {
+const MONAS_OBJ = require('../../../assets/3Dobj/Monas_Tower/monas_tower_model.obj');
+const MONAS_MTL = require('../../../assets/3Dobj/Monas_Tower/monas_tower_material.mtl');
+const MONAS_TEXTURE = require('../../../assets/3Dobj/Monas_Tower/monas_tower_texture.png');
+
+function MonasFallback() {
   const marble = '#e4e8e6';
   const gold = '#e8ae37';
   return <group position={[0, 0, 0]}>
@@ -43,6 +49,47 @@ function Monas() {
     <mesh position={[0, 7.55, 0]}><sphereGeometry args={[0.055, 12, 10]} /><meshStandardMaterial color="#fff0a4" emissive="#ffbf36" emissiveIntensity={0.9} /></mesh>
     <pointLight position={[0, 7.0, 0]} color="#ffbf4a" intensity={0.8} distance={7} />
   </group>;
+}
+
+function MonasObjModel({ objUri, mtlUri, textureUri }) {
+  const materials = useLoader(MTLLoader, mtlUri, (loader) => {
+    loader.manager.setURLModifier((url) => url.endsWith('monas_tower_texture.png') ? textureUri : url);
+  });
+  const object = useLoader(OBJLoader, objUri, (loader) => loader.setMaterials(materials));
+  const scene = useMemo(() => {
+    materials.preload();
+    object.traverse((child) => {
+      if (!child.isMesh) return;
+      child.castShadow = true;
+      child.receiveShadow = true;
+    });
+    return object;
+  }, [materials, object]);
+
+  return <primitive object={scene} position={[0, 3.84, 0]} scale={4} rotation={[0, Math.PI, 0]} />;
+}
+
+function Monas() {
+  const [assetUris, setAssetUris] = useState(null);
+
+  useEffect(() => {
+    let active = true;
+    const assets = [Asset.fromModule(MONAS_OBJ), Asset.fromModule(MONAS_MTL), Asset.fromModule(MONAS_TEXTURE)];
+    Promise.all(assets.map((asset) => asset.downloadAsync()))
+      .then(() => {
+        if (!active) return;
+        setAssetUris({
+          objUri: assets[0].localUri || assets[0].uri,
+          mtlUri: assets[1].localUri || assets[1].uri,
+          textureUri: assets[2].localUri || assets[2].uri,
+        });
+      })
+      .catch((error) => console.warn('Could not prepare Monas OBJ assets', error));
+    return () => { active = false; };
+  }, []);
+
+  if (!assetUris) return <MonasFallback />;
+  return <Suspense fallback={<MonasFallback />}><MonasObjModel {...assetUris} /></Suspense>;
 }
 
 function ParkLamp({ position }) {

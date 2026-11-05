@@ -1,5 +1,5 @@
 import React, { Suspense, useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, Easing, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Animated, Easing, Image, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Canvas, useFrame } from '@react-three/fiber';
 import { useAnimations } from '@react-three/drei/core/useAnimations';
 import { useGLTF } from '@react-three/drei/core/Gltf';
@@ -10,6 +10,12 @@ import { faChevronLeft, faChevronRight, faHandPointer } from '@fortawesome/free-
 import glbModels from '../../library/data/glbModels';
 
 const HERO_MODELS = glbModels;
+const HERO_IMAGES = [
+  { label: 'Twini - IDTC', image: require('../../../assets/imageTwini/TwiniGG.png') },
+  { label: 'Twini - Engineer', image: require('../../../assets/imageTwini/Engineer High-Res Render.png') },
+  { label: 'Twini - Computer Scientist', image: require('../../../assets/imageTwini/Computer Scientist.png') },
+  { label: 'Twini - Smart City', image: require('../../../assets/imageTwini/Urban Planning and Architecture.png') },
+];
 
 function AnimatedGlb({ uri, replayKey }) {
   const root = useRef(null);
@@ -121,12 +127,26 @@ function BubbleField() {
   return <>{bubbles.map((bubble) => <RisingBubble key={bubble.id} bubble={bubble} />)}</>;
 }
 
+function AndroidImageHero({ image, label }) {
+  return (
+    <View style={styles.nativeHero}>
+      <View style={styles.nativeHeroGlow} />
+      <Image source={image} style={styles.nativeHeroImage} resizeMode="contain" fadeDuration={180} />
+      <View style={styles.nativeHeroLabel}>
+        <Text style={styles.nativeHeroLabelText}>{label}</Text>
+        <Text style={styles.nativeHeroLabelHint}>Image carousel · IDTC</Text>
+      </View>
+    </View>
+  );
+}
+
 export default function TwiniHeroBackground() {
   const [selectedIndex, setSelectedIndex] = useState(Math.max(0, HERO_MODELS.findIndex((model) => model.id === 'twini-idtc')));
   const [modelUri, setModelUri] = useState(null);
   const [replayKey, setReplayKey] = useState(0);
   const tapMotion = useRef(new Animated.Value(0)).current;
   const model = HERO_MODELS[selectedIndex];
+  const imageModel = HERO_IMAGES[selectedIndex % HERO_IMAGES.length];
 
   useEffect(() => {
     let active = true;
@@ -154,15 +174,19 @@ export default function TwiniHeroBackground() {
 
   return (
     <View style={styles.container}>
-      <Canvas style={styles.modelCanvas} camera={{ position: [0, 0, 4.5], fov: 42, near: 0.1, far: 100 }} dpr={1} gl={{ alpha: true, antialias: true }} onCreated={({ gl }) => gl.setClearColor('#000000', 0)}>
-        <ambientLight intensity={1.3} />
-        <directionalLight position={[2, 4, 5]} intensity={1.8} />
-        <directionalLight position={[-3, 1, -2]} intensity={0.8} color="#79baff" />
-        <BubbleField />
-        <Suspense fallback={<LoadingModel />}>
-          {modelUri ? <AnimatedGlb key={modelUri} uri={modelUri} replayKey={replayKey} /> : <LoadingModel />}
-        </Suspense>
-      </Canvas>
+      {Platform.OS === 'android' ? (
+        <AndroidImageHero image={imageModel.image} label={imageModel.label} />
+      ) : (
+        <Canvas style={styles.modelCanvas} camera={{ position: [0, 0, 4.5], fov: 42, near: 0.1, far: 100 }} dpr={1} gl={{ alpha: true, antialias: true }} onCreated={({ gl }) => gl.setClearColor('#000000', 0)}>
+          <ambientLight intensity={1.3} />
+          <directionalLight position={[2, 4, 5]} intensity={1.8} />
+          <directionalLight position={[-3, 1, -2]} intensity={0.8} color="#79baff" />
+          <BubbleField />
+          <Suspense fallback={<LoadingModel />}>
+            {modelUri ? <AnimatedGlb key={modelUri} uri={modelUri} replayKey={replayKey} /> : <LoadingModel />}
+          </Suspense>
+        </Canvas>
+      )}
 
       <View pointerEvents="box-none" style={styles.controls}>
         <TouchableOpacity onPress={() => selectModel(-1)} style={styles.arrowButton} accessibilityRole="button" accessibilityLabel="Model sebelumnya">
@@ -173,14 +197,20 @@ export default function TwiniHeroBackground() {
         </TouchableOpacity>
         <View style={styles.animatePrompt}>
           <Text style={styles.animateWarning}>⚠ SENTUH</Text>
-          <TouchableOpacity onPress={() => setReplayKey((key) => key + 1)} style={styles.animateButton} accessibilityRole="button" accessibilityLabel="Putar ulang animasi model">
-            <Animated.View style={{ transform: [
-              { translateY: tapMotion.interpolate({ inputRange: [0, 1], outputRange: [0, -5] }) },
-              { scale: tapMotion.interpolate({ inputRange: [0, 1], outputRange: [1, 1.08] }) },
-            ] }}>
+          {Platform.OS === 'android' ? (
+            <View style={styles.animateButton} accessible accessibilityLabel="Carousel gambar aktif">
               <FontAwesomeIcon icon={faHandPointer} size={19} color="#fff4d5" />
-            </Animated.View>
-          </TouchableOpacity>
+            </View>
+          ) : (
+            <TouchableOpacity onPress={() => setReplayKey((key) => key + 1)} style={styles.animateButton} accessibilityRole="button" accessibilityLabel="Putar ulang animasi model">
+              <Animated.View style={{ transform: [
+                { translateY: tapMotion.interpolate({ inputRange: [0, 1], outputRange: [0, -5] }) },
+                { scale: tapMotion.interpolate({ inputRange: [0, 1], outputRange: [1, 1.08] }) },
+              ] }}>
+                <FontAwesomeIcon icon={faHandPointer} size={19} color="#fff4d5" />
+              </Animated.View>
+            </TouchableOpacity>
+          )}
         </View>
       </View>
     </View>
@@ -190,6 +220,12 @@ export default function TwiniHeroBackground() {
 const styles = StyleSheet.create({
   container: { ...StyleSheet.absoluteFillObject, overflow: 'hidden' },
   modelCanvas: { flex: 1, width: '100%', height: '100%' },
+  nativeHero: { flex: 1, width: '100%', height: '100%', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+  nativeHeroGlow: { position: 'absolute', width: 270, height: 270, borderRadius: 135, backgroundColor: '#347ed2', opacity: 0.2 },
+  nativeHeroImage: { width: '92%', height: '82%', marginTop: -4 },
+  nativeHeroLabel: { position: 'absolute', left: 18, right: 18, bottom: 58, alignItems: 'center', paddingHorizontal: 12, paddingVertical: 7, borderRadius: 14, backgroundColor: 'rgba(8,19,33,0.72)', borderWidth: 1, borderColor: 'rgba(241,248,255,0.2)' },
+  nativeHeroLabelText: { color: '#f7faff', fontSize: 11, fontWeight: '800', letterSpacing: 0.7 },
+  nativeHeroLabelHint: { color: '#a8c4e3', fontSize: 8, marginTop: 2, letterSpacing: 0.4 },
   controls: { ...StyleSheet.absoluteFillObject, zIndex: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 12 },
   arrowButton: { position: 'relative', top: 40, width: 38, height: 42, alignItems: 'center', justifyContent: 'center', borderRadius: 13, backgroundColor: 'rgba(209,230,255,0.18)', borderWidth: 1, borderColor: 'rgba(244,249,255,0.34)' },
   animatePrompt: { position: 'absolute', left: 0, right: 0, bottom: 106, alignItems: 'center', gap: 4 },

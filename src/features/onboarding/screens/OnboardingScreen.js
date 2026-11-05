@@ -13,17 +13,17 @@ const slides = [
   {
     title: 'Create with AI',
     description: 'Turn ideas into useful 3D assets and bring new concepts into your workspace.',
-    image: require('../../../assets/imageTwini/Meshy_AI_Twiny Computer Scientist.png'),
+    image: require('../../../assets/imageTwini/Computer Scientist.png'),
   },
   {
     title: 'Build digital twins',
     description: 'Place models in real-world contexts and explore how your ideas work together.',
-    image: require('../../../assets/imageTwini/Meshy_AI_Twiny Urban Planning and Architecture.png'),
+    image: require('../../../assets/imageTwini/Urban Planning and Architecture.png'),
   },
   {
     title: 'Make smarter decisions',
     description: 'Use recommendations to find promising locations and improve project layouts.',
-    image: require('../../../assets/imageTwini/Meshy_AI_Twiny Geodesy and Urban Planning.png_....png'),
+    image: require('../../../assets/imageTwini/Geodesy and Urban Planning.png'),
   },
 ];
 
