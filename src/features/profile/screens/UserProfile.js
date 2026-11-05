@@ -15,10 +15,14 @@ import { FontAwesomeIcon } from '@fortawesome/react-native-fontawesome';
 import { faUser, faCog, faMessage, faDownload, faFilter, faArrowLeft, faCompass } from '@fortawesome/free-solid-svg-icons';
 import ResponsiveContent from '../../../shared/components/ResponsiveContent';
 import { useAuth } from '../../auth/data/AuthContext';
+import { useTheme } from '../../../shared/theme/ThemeContext';
+import ThemeSelector from '../../../shared/components/ThemeSelector';
 
 const UserProfile = ({ navigation }) => {
   const { width } = useWindowDimensions();
   const { user, updateProfile, changePassword, deleteAccount, logout } = useAuth();
+  const { theme, themeId, setTheme, themes, themeIds } = useTheme();
+  const [themeModal, setThemeModal] = React.useState(false);
   const [accountModal, setAccountModal] = React.useState(null);
   const [profileDraft, setProfileDraft] = React.useState({});
   const [currentPassword, setCurrentPassword] = React.useState('');
@@ -199,15 +203,22 @@ const UserProfile = ({ navigation }) => {
             <Text style={styles.settingDescription}>View the getting started guide</Text>
           </View>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.settingItem} onPress={() => alert('Settings')}>
+        <TouchableOpacity style={styles.settingItem} onPress={() => setThemeModal(true)} accessibilityRole="button">
           <FontAwesomeIcon icon={faCog} size="16" color="#64748b" />
-          <Text style={styles.settingText}>General</Text>
+          <View style={styles.settingCopy}>
+            <Text style={styles.settingText}>Theme</Text>
+            <Text style={styles.settingDescription}>{theme.name} — pilih dari 10 tema</Text>
+          </View>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.settingItem} onPress={() => alert('Help')}>
+        <TouchableOpacity style={styles.settingItem} onPress={() => alert('Help')} accessibilityRole="button">
           <FontAwesomeIcon icon={faMessage} size="16" color="#64748b" />
           <Text style={styles.settingText}>Help Center</Text>
         </TouchableOpacity>
       </View>
+
+      <Modal visible={themeModal} transparent animationType="fade" onRequestClose={() => setThemeModal(false)}>
+        <ThemeSelector onClose={() => setThemeModal(false)} />
+      </Modal>
 
       {user && <>
         <TouchableOpacity style={styles.logout} onPress={signOut} accessibilityRole="button">

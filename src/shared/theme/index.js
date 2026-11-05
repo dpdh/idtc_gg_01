@@ -1,3 +1,6 @@
+export { ThemeProvider, useTheme } from './ThemeContext';
+export { THEMES, THEME_IDS, spacing, radii } from './themes';
+
 export const colors = Object.freeze({
   background: '#090f1b',
   surface: 'rgba(255,255,255,0.065)',
@@ -11,9 +14,11 @@ export const colors = Object.freeze({
   danger: '#f28b8b',
 });
 
-export const spacing = Object.freeze({ xs: 4, sm: 8, md: 12, lg: 16, xl: 24, xxl: 32 });
-
-export const radii = Object.freeze({ sm: 10, md: 16, lg: 22, xl: 30, pill: 999 });
+export const defaultTheme = {
+  id: 'default',
+  name: 'Deep Space',
+  colors,
+};
 
 const theme = Object.freeze({ colors, spacing, radii });
 export default theme;
