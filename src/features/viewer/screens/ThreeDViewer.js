@@ -1,42 +1,58 @@
-import React, { Suspense, useEffect, useRef, useCallback, useState } from 'react';
+import React, { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
   StatusBar,
+  ActivityIndicator,
+  Platform,
 } from 'react-native';
-import { Canvas } from '@react-three/fiber';
-import { Bounds } from '@react-three/drei/core/Bounds';
-import { Center } from '@react-three/drei/core/Center';
-import { OrbitControls } from '@react-three/drei/core/OrbitControls';
-import { useAnimations } from '@react-three/drei/core/useAnimations';
-import { useGLTF } from '@react-three/drei/core/Gltf';
-import { Asset } from 'expo-asset';
+import { Canvas, OrbitControls, useAnimations, useGLTF, getGLTFSource } from '../components/ThreeDRenderer';
+import { glbSourceFor } from '../utils/glbSource';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { FontAwesomeIcon } from '@fortawesome/react-native-fontawesome';
-import { faArrowLeft, faRotate, faExpand } from '@fortawesome/free-solid-svg-icons';
+import { faArrowLeft, faRotate } from '@fortawesome/free-solid-svg-icons';
+import { getGLTFFrame } from '../utils/glbBounds';
 import glbModels from '../../library/data/glbModels';
 
-function GlbModel({ source, uri }) {
+class ModelErrorBoundary extends React.Component {
+  state = { hasError: false };
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error) {
+    console.warn('[ThreeDViewer] GLB model failed to load', error);
+    this.props.onError();
+  }
+
+  render() {
+    return this.state.hasError ? null : this.props.children;
+  }
+}
+
+function GlbModel({ source, uri, onReady }) {
   const group = useRef(null);
-  const asset = source ? Asset.fromModule(source) : null;
-  const modelUri = uri || asset?.localUri || asset?.uri;
-  const { scene, animations } = useGLTF(modelUri);
+  const { scene, animations } = useGLTF(getGLTFSource(source, uri));
+  const modelFrame = React.useMemo(() => getGLTFFrame(scene), [scene]);
   const { actions } = useAnimations(animations, group);
 
+  useEffect(() => { onReady(); }, [onReady, scene]);
+
   useEffect(() => {
-    const firstAnimation = Object.values(actions)[0];
-    firstAnimation?.reset().fadeIn(0.3).play();
-    return () => Object.values(actions).forEach((action) => action.fadeOut(0.2));
+    const availableActions = Object.values(actions).filter((action) => action && typeof action.reset === 'function');
+    const firstAnimation = availableActions[0];
+    firstAnimation?.reset();
+    firstAnimation?.fadeIn?.(0.3);
+    firstAnimation?.play?.();
+    return () => availableActions.forEach((action) => action.fadeOut?.(0.2));
   }, [actions]);
 
-  return (
-    <group ref={group}>
-      <Center>
-        <primitive object={scene} />
-      </Center>
-    </group>
-  );
+  return <group ref={group} scale={modelFrame.scale}>
+    <group position={modelFrame.center.map((value) => -value)}><primitive object={scene} /></group>
+  </group>;
 }
 
 function LoadingModel() {
@@ -48,18 +64,34 @@ function LoadingModel() {
   );
 }
 
+function ModelLoadingOverlay() {
+  return <View style={styles.loading} pointerEvents="none">
+    <ActivityIndicator color="#86bdff" />
+    <Text style={styles.loadingText}>Memuat model 3D…</Text>
+  </View>;
+}
+
 export default function ThreeDViewer({ navigation, route }) {
   const insets = useSafeAreaInsets();
   const model = route?.params?.model ?? glbModels[0];
+  const [modelUri, setModelUri] = useState(model.uri || null);
+  const [modelReady, setModelReady] = useState(false);
+  const [loadError, setLoadError] = useState(false);
+  const handleModelReady = useCallback(() => setModelReady(true), []);
+  const handleModelError = useCallback(() => setLoadError(true), []);
 
-  // Fixed DPR - retina devices use 2, others use 1
-  const dpr = 2;
-
-  const frameCountRef = useRef(0);
-  const lastTimeRef = useRef(0);
-
-  const [cameraPos, setCameraPos] = useState([0, 1.6, 4.5]);
-  const [camFov, setCamFov] = useState(45);
+  useEffect(() => {
+    let active = true;
+    setModelUri(model.uri || null);
+    setModelReady(false);
+    setLoadError(false);
+    if (model.uri || !model.source) return () => { active = false; };
+    // Native resolves the bundled module itself (works in Android release builds); web gets the URL.
+    const resolved = glbSourceFor(model.source);
+    if (resolved != null) setModelUri(resolved);
+    else setLoadError(true);
+    return () => { active = false; };
+  }, [model]);
 
   return (
     <View style={styles.screen}>
@@ -67,30 +99,24 @@ export default function ThreeDViewer({ navigation, route }) {
       <Canvas
         style={StyleSheet.absoluteFill}
         camera={{
-          position: cameraPos,
-          fov: camFov,
+          position: [0, 0, 4.5],
+          fov: 42,
           near: 0.1,
           far: 100,
         }}
-        dpr={dpr}
-        gl={{ preserveDrawingBuffer: true, powerPreference: 'high-performance' }}
-        onCreated={({ gl }) => {
-          if (__DEV__) {
-            console.log(
-              '[ThreeDViewer] GL renderer:',
-              gl.getExtension('WEBGL_debug_renderer_info')?.getParameter(0x9246) || 'unknown',
-            );
-          }
-        }}
+        dpr={[1, 1.5]}
+        gl={{ antialias: true, alpha: false, powerPreference: 'high-performance' }}
       >
         <color attach="background" args={['#090f1b']} />
-        <ambientLight intensity={1.2} />
-        <directionalLight position={[3, 5, 4]} intensity={2} castShadow />
-        <directionalLight position={[-3, 1, -2]} intensity={0.8} color="#79baff" castShadow />
+        <ambientLight intensity={1.3} />
+        <directionalLight position={[2, 4, 5]} intensity={1.8} />
+        <directionalLight position={[-3, 1, -2]} intensity={0.8} color="#79baff" />
         <Suspense fallback={<LoadingModel />}>
-          <Bounds fit clip margin={1.15}>
-            <GlbModel source={model.source} uri={model.uri} />
-          </Bounds>
+          {modelUri ? (
+            <ModelErrorBoundary key={`${model.id}-${modelUri}`} onError={handleModelError}>
+              <GlbModel source={model.source} uri={modelUri} onReady={handleModelReady} />
+            </ModelErrorBoundary>
+          ) : <LoadingModel />}
         </Suspense>
         <OrbitControls
           makeDefault
@@ -101,6 +127,10 @@ export default function ThreeDViewer({ navigation, route }) {
           maxPolarAngle={Math.PI}
 />
       </Canvas>
+
+      {modelUri && !modelReady && !loadError && <ModelLoadingOverlay />}
+      {!modelUri && !loadError && <ModelLoadingOverlay />}
+      {loadError && <View style={styles.loading}><Text style={styles.errorText}>Model tidak dapat dimuat. Coba buka kembali.</Text></View>}
 
       <View style={[styles.topOverlay, { paddingTop: Math.max(insets.top, 14) }]}>
         <TouchableOpacity
@@ -113,7 +143,7 @@ export default function ThreeDViewer({ navigation, route }) {
         </TouchableOpacity>
         <View style={styles.namePill}>
           <Text style={styles.eyebrow}>GLB MODEL</Text>
-          <Text numberOfLines={1} style={styles.title}>{model.name}</Text>
+          <Text numberOfLines={1} style={styles.title}>{model.id === 'twini-idtc' ? 'TWINI-IDTC' : model.name}</Text>
         </View>
       </View>
 
@@ -133,6 +163,9 @@ export default function ThreeDViewer({ navigation, route }) {
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#090f1b', overflow: 'hidden' },
+  loading: { ...StyleSheet.absoluteFill, alignItems: 'center', justifyContent: 'center', gap: 10, backgroundColor: 'rgba(9,15,27,0.72)' },
+  loadingText: { color: '#d6e8fb', fontSize: 13, fontWeight: '600' },
+  errorText: { color: '#ffd0ce', fontSize: 13, textAlign: 'center', paddingHorizontal: 30 },
   topOverlay: {
     position: 'absolute',
     top: 0,

@@ -8,22 +8,22 @@ const slides = [
   {
     title: 'Explore a 3D world',
     description: 'Browse digital assets and discover models across buildings, infrastructure and more.',
-    image: require('../../../assets/imageTwini/Meshy_AI_Twiny Engineer High-Res Render.png_no....png'),
+    image: require('../../../assets/imageTwini/Meshy_AI_Twiny Engineer High-Res Render_no.webp'),
   },
   {
     title: 'Create with AI',
     description: 'Turn ideas into useful 3D assets and bring new concepts into your workspace.',
-    image: require('../../../assets/imageTwini/Computer Scientist.png'),
+    image: require('../../../assets/imageTwini/Computer Scientist.webp'),
   },
   {
     title: 'Build digital twins',
     description: 'Place models in real-world contexts and explore how your ideas work together.',
-    image: require('../../../assets/imageTwini/Urban Planning and Architecture.png'),
+    image: require('../../../assets/imageTwini/Urban Planning and Architecture.webp'),
   },
   {
     title: 'Make smarter decisions',
     description: 'Use recommendations to find promising locations and improve project layouts.',
-    image: require('../../../assets/imageTwini/Geodesy and Urban Planning.png'),
+    image: require('../../../assets/imageTwini/Geodesy and Urban Planning.webp'),
   },
 ];
 

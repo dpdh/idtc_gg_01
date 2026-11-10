@@ -2,7 +2,19 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const root = path.resolve(__dirname, '..', 'dist');
+const { openDatabase } = require('./db');
+const game = require('./game');
+const { createApi, STORAGE_DIR } = require('./api');
+const gameContent = require('../src/features/game/data/gameContent.json');
+
+const root = path.resolve(__dirname, '..', process.env.DIST_DIR || 'dist');
+const ADMIN_PAGE = path.join(__dirname, 'admin', 'index.html');
+const db = openDatabase();
+game.seedContent(db, gameContent);
+if (process.env.TWINI_ADMIN_EMAIL && process.env.TWINI_ADMIN_PASSWORD) {
+  game.bootstrapAdmin(db, process.env.TWINI_ADMIN_EMAIL, process.env.TWINI_ADMIN_PASSWORD);
+}
+const handleApi = createApi(db);
 const port = Number(process.env.PORT || 8000);
 const mimeTypes = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
@@ -72,6 +84,22 @@ const server = http.createServer(async (req, res) => {
   const requestUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   const apiMatch = requestUrl.pathname.match(/^\/api\/meshy\/(text-to-3d|image-to-3d)(?:\/([^/]+))?\/?$/);
   if (apiMatch) return proxyMeshy(req, res, apiMatch[1], apiMatch[2] ? decodeURIComponent(apiMatch[2]) : null);
+  if (requestUrl.pathname.startsWith('/api/')) return handleApi(req, res, requestUrl.pathname.slice(4), requestUrl.searchParams);
+  if (req.method === 'GET' && /^\/admin\/?$/.test(requestUrl.pathname)) {
+    res.writeHead(200, {
+      'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'X-Frame-Options': 'DENY', 'X-Content-Type-Options': 'nosniff',
+      'Referrer-Policy': 'no-referrer', 'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'",
+    });
+    return fs.createReadStream(ADMIN_PAGE).pipe(res);
+  }
+  const storageMatch = requestUrl.pathname.match(/^\/storage\/assets\/([A-Za-z0-9-]+\.glb)$/);
+  if (storageMatch && req.method === 'GET') {
+    const file = path.join(STORAGE_DIR, storageMatch[1]);
+    return fs.promises.stat(file).then((stat) => {
+      res.writeHead(200, { 'Content-Type': 'model/gltf-binary', 'Content-Length': stat.size, 'Cache-Control': 'public, max-age=86400', 'X-Content-Type-Options': 'nosniff' });
+      fs.createReadStream(file).pipe(res);
+    }).catch(() => json(res, 404, { error: 'Model tidak ditemukan.' }));
+  }
   if (req.method !== 'GET' && req.method !== 'HEAD') return json(res, 405, { error: 'Method not allowed.' });
 
   let pathname;
@@ -107,6 +135,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(port, '0.0.0.0', () => {
-  console.log(`Web app and Meshy proxy listening on http://localhost:${port}`);
+  console.log(`Web app, game API and Meshy proxy listening on http://localhost:${port}`);
+  console.log(`Admin dashboard: http://localhost:${port}/admin`);
   if (!process.env.MESHY_API_KEY) console.warn('MESHY_API_KEY is not set; Meshy requests will return 503.');
 });

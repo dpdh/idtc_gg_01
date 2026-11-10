@@ -2,7 +2,7 @@
   "expo": {
     "name": "TWINI",
     "slug": "twini",
-    "version": "1.0.3",
+    "version": "1.0.12",
     "orientation": "default",
     "icon": "./src/assets/imageTwini/gg_icon-IDTC-app.png",
     "ios": {
@@ -11,6 +11,7 @@
     },
     "android": {
       "package": "com.twini.app",
+      "versionCode": 13,
       "adaptiveIcon": {
         "foregroundImage": "./src/assets/imageTwini/gg_icon-IDTC.png",
         "backgroundColor": "#0873bd"

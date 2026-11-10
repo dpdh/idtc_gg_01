@@ -6,7 +6,10 @@
     "start": "expo start",
     "web": "expo start --web",
     "build:web": "expo export --platform web",
-    "serve": "node server/server.js"
+    "serve": "node server/server.js",
+    "test:server": "node --test server/tests/api.test.js",
+    "test:engine": "node --test __tests__/missionEngine.test.mjs",
+    "test": "node --test __tests__/missionEngine.test.mjs server/tests/api.test.js"
   },
   "keywords": [],
   "author": "",

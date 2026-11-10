@@ -110,7 +110,6 @@ export default function AppNavigator() {
         setScreen(SCREENS.MESHY_GENERATOR);
         break;
       case 'CityBuilder':
-      case 'Maps':
         setScreen(SCREENS.CITY_BUILDER);
         break;
       case 'Main':

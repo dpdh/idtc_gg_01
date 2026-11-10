@@ -1,10 +1,20 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Image, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View, useWindowDimensions } from 'react-native';
+import { ActivityIndicator, Platform, Image, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View, useWindowDimensions } from 'react-native';
 import { FontAwesomeIcon } from '@fortawesome/react-native-fontawesome';
 import { faArrowLeft, faCube, faWandMagicSparkles } from '@fortawesome/free-solid-svg-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const TERMINAL_STATES = new Set(['SUCCEEDED', 'FAILED', 'CANCELED']);
+
+// Web is served by our own server, so a relative URL works. Native builds (APK/AAB) have no host,
+// so they need the public HTTPS URL of server/server.js, set at build time via EXPO_PUBLIC_API_URL.
+const API_ORIGIN = (process.env.EXPO_PUBLIC_API_URL || '').replace(/\/+$/, '');
+function meshyApiBase(mode) {
+  if (Platform.OS !== 'web' && !API_ORIGIN) {
+    throw new Error('Fitur AI belum tersedia: server belum dikonfigurasi untuk aplikasi ini.');
+  }
+  return `${API_ORIGIN}/api/meshy/${mode === 'image' ? 'image-to-3d' : 'text-to-3d'}`;
+}
 
 async function readResponse(response) {
   const data = await response.json().catch(() => ({}));
@@ -29,7 +39,7 @@ export default function MeshyGeneratorScreen({ navigation }) {
 
   const pollTask = async (taskId) => {
     try {
-      const apiBase = `/api/meshy/${mode === 'image' ? 'image-to-3d' : 'text-to-3d'}`;
+      const apiBase = meshyApiBase(mode);
       const data = await readResponse(await fetch(`${apiBase}/${encodeURIComponent(taskId)}`));
       setTask(data);
       if (TERMINAL_STATES.has(data.status)) {
@@ -51,7 +61,7 @@ export default function MeshyGeneratorScreen({ navigation }) {
     setTask(null);
     setBusy(true);
     try {
-      const apiBase = `/api/meshy/${mode === 'image' ? 'image-to-3d' : 'text-to-3d'}`;
+      const apiBase = meshyApiBase(mode);
       const payload = mode === 'image'
         ? {
           image_url: imageUrl.trim(), texture_prompt: texturePrompt.trim(),

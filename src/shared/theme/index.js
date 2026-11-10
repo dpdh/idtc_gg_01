@@ -1,5 +1,7 @@
+import { THEMES, THEME_IDS, spacing, radii } from './themes';
+
 export { ThemeProvider, useTheme } from './ThemeContext';
-export { THEMES, THEME_IDS, spacing, radii } from './themes';
+export { THEMES, THEME_IDS, spacing, radii };
 
 export const colors = Object.freeze({
   background: '#090f1b',

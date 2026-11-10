@@ -4,6 +4,7 @@ node_modules
 android/app/build/
 ios/build/
 dist/
+dist-web/
 .expo/
 
 # IDE
@@ -16,3 +17,11 @@ dist/
 # Platform native dirs (large binaries)
 android/
 ios/
+
+# TWINI game backend runtime data (database, uploaded models)
+server/data/
+server/storage/
+
+# macOS AppleDouble metadata junk
+._*
+Thumbs.db

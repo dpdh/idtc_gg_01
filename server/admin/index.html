@@ -1,0 +1,345 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TWINI Admin</title>
+<style>
+  :root { --bg:#070d18; --panel:#0e1829; --panel2:#132139; --line:#22344f; --text:#e6f0fb; --muted:#8aa0bb; --cyan:#5fd3ff; --gold:#f2c45f; --red:#ff7f91; --green:#6ee7a8; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:14px/1.45 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background:var(--bg); color:var(--text); }
+  header { display:flex; align-items:center; gap:12px; padding:12px 18px; border-bottom:1px solid var(--line); background:#0a1322; position:sticky; top:0; z-index:2; }
+  header b { color:var(--cyan); letter-spacing:.08em; }
+  header .who { margin-left:auto; color:var(--muted); font-size:13px; }
+  .layout { display:flex; min-height:calc(100vh - 50px); }
+  nav { width:230px; border-right:1px solid var(--line); padding:10px; flex-shrink:0; }
+  nav button { display:block; width:100%; text-align:left; background:none; border:0; color:var(--muted); padding:8px 10px; border-radius:8px; cursor:pointer; font-size:13px; }
+  nav button.active, nav button:hover { background:var(--panel2); color:var(--text); }
+  main { flex:1; padding:18px; overflow:auto; min-width:0; }
+  h2 { margin:0 0 4px; font-size:20px; } .sub { color:var(--muted); margin:0 0 16px; font-size:13px; }
+  .cards { display:grid; grid-template-columns:repeat(auto-fill,minmax(170px,1fr)); gap:10px; margin-bottom:16px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:12px; }
+  .card .v { font-size:22px; font-weight:700; color:var(--gold); } .card .l { color:var(--muted); font-size:12px; }
+  table { width:100%; border-collapse:collapse; background:var(--panel); border:1px solid var(--line); border-radius:12px; overflow:hidden; font-size:13px; }
+  th, td { padding:8px 10px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; }
+  th { background:var(--panel2); color:var(--muted); font-weight:600; font-size:12px; }
+  .tablewrap { overflow-x:auto; }
+  input, select, textarea { background:#08111f; color:var(--text); border:1px solid var(--line); border-radius:8px; padding:7px 9px; font:inherit; width:100%; }
+  textarea { min-height:90px; font-family:ui-monospace, Consolas, monospace; font-size:12px; }
+  label { display:block; font-size:12px; color:var(--muted); margin:8px 0 3px; }
+  .grid2 { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:0 12px; }
+  button.btn { background:var(--cyan); color:#04111d; border:0; border-radius:8px; padding:7px 12px; font-weight:700; cursor:pointer; font-size:13px; }
+  button.btn.ghost { background:var(--panel2); color:var(--text); border:1px solid var(--line); }
+  button.btn.danger { background:var(--red); }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:10px 0; }
+  .pill { display:inline-block; padding:1px 8px; border-radius:99px; font-size:11px; font-weight:700; background:var(--panel2); }
+  .pill.published, .pill.active, .pill.REDEEMED, .pill.DELIVERED, .pill.available { color:var(--green); }
+  .pill.draft, .pill.PENDING, .pill.CONFIRMED, .pill.PROCESSING, .pill.SHIPPED { color:var(--gold); }
+  .pill.archived, .pill.inactive, .pill.banned, .pill.CANCELLED, .pill.void { color:var(--red); }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px; margin-bottom:14px; }
+  .msg { padding:8px 12px; border-radius:8px; margin:8px 0; font-size:13px; } .msg.err { background:#3a1520; color:#ffc1cb; } .msg.ok { background:#10301f; color:#b6f5d2; }
+  .login { max-width:360px; margin:12vh auto; } .muted { color:var(--muted); }
+  @media (max-width:760px) { .layout { flex-direction:column; } nav { width:auto; display:flex; overflow-x:auto; border-right:0; border-bottom:1px solid var(--line); } nav button { white-space:nowrap; width:auto; } }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+'use strict';
+const state = { token: sessionStorage.getItem('twiniAdminToken'), user: null, tab: 'overview' };
+const app = document.getElementById('app');
+const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const fmt = (n) => Number(n || 0).toLocaleString('id-ID');
+const date = (s) => s ? new Date(s).toLocaleString('id-ID') : '–';
+
+async function api(method, path, body, raw) {
+  const res = await fetch(`/api${path}`, {
+    method, headers: { Authorization: `Bearer ${state.token}`, ...(body && !raw ? { 'Content-Type': 'application/json' } : {}) },
+    body: raw ? body : body ? JSON.stringify(body) : undefined,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (res.status === 401) { logout(); throw new Error('Sesi berakhir.'); }
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
+}
+
+function flash(text, ok = true) {
+  const el = document.getElementById('flash');
+  if (el) { el.innerHTML = `<div class="msg ${ok ? 'ok' : 'err'}">${esc(text)}</div>`; setTimeout(() => { if (el) el.innerHTML = ''; }, 5000); }
+}
+async function act(fn, okText) { try { await fn(); if (okText) flash(okText); await render(); } catch (e) { flash(e.message, false); } }
+
+function logout() { sessionStorage.removeItem('twiniAdminToken'); state.token = null; state.user = null; renderLogin(); }
+
+function renderLogin(error) {
+  app.innerHTML = `<div class="login panel"><h2>TWINI Admin</h2><p class="sub">Masuk dengan akun berperan <b>admin</b>.</p>
+    ${error ? `<div class="msg err">${esc(error)}</div>` : ''}
+    <form id="lf"><label>Email</label><input name="email" type="email" required autocomplete="username"><label>Password</label><input name="password" type="password" required autocomplete="current-password">
+    <div class="row"><button class="btn">Masuk</button></div></form></div>`;
+  document.getElementById('lf').onsubmit = async (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    try {
+      const res = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: f.get('email'), password: f.get('password') }) });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      if (data.user.role !== 'admin') throw new Error('Akun ini bukan administrator.');
+      state.token = data.token; state.user = data.user; sessionStorage.setItem('twiniAdminToken', data.token); renderShell();
+    } catch (err) { renderLogin(err.message); }
+  };
+}
+
+const TABS = [
+  ['overview', 'Dashboard Overview'], ['world', 'World & Map'], ['assets', 'Digital Twin Assets'], ['missions', 'Mission Management'],
+  ['characters', 'Characters & NPC'], ['products', 'Rewards & Merchandise'], ['vouchers', 'Voucher Management'], ['redemptions', 'Redemptions'],
+  ['players', 'Player Management'], ['transactions', 'Twin Points & Fraud'], ['leaderboard', 'Leaderboard'], ['events', 'Event Management'],
+  ['config', 'Game Configuration'], ['audit', 'Audit Log'],
+];
+
+function renderShell() {
+  app.innerHTML = `<header><b>TWINI · ADMIN</b><span class="muted">Explore. Survive. Learn. Build the Future.</span>
+    <span class="who">${esc(state.user?.email || '')} · <a href="#" id="lo" style="color:var(--cyan)">Keluar</a></span></header>
+    <div class="layout"><nav>${TABS.map(([id, label]) => `<button data-tab="${id}" class="${state.tab === id ? 'active' : ''}">${esc(label)}</button>`).join('')}</nav>
+    <main><div id="flash"></div><div id="view">Memuat…</div></main></div>`;
+  document.getElementById('lo').onclick = async (e) => { e.preventDefault(); try { await api('POST', '/auth/logout'); } catch {} logout(); };
+  app.querySelectorAll('nav button').forEach((b) => b.onclick = () => { state.tab = b.dataset.tab; renderShell(); });
+  render();
+}
+
+async function render() {
+  const view = document.getElementById('view');
+  if (!view) return;
+  try { view.innerHTML = await VIEWS[state.tab](); bind[state.tab]?.(); } catch (e) { view.innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
+}
+
+const table = (head, rows) => `<div class="tablewrap"><table><thead><tr>${head.map((h) => `<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.join('') || `<tr><td colspan="${head.length}" class="muted">Belum ada data.</td></tr>`}</tbody></table></div>`;
+
+const VIEWS = {
+  async overview() {
+    const o = await api('GET', '/admin/overview');
+    const c = (l, v) => `<div class="card"><div class="v">${esc(v)}</div><div class="l">${esc(l)}</div></div>`;
+    return `<h2>Dashboard Overview</h2><p class="sub">Ringkasan game TWINI: Monas Survival Adventure.</p>
+      <div class="cards">${c('Pemain', fmt(o.players))}${c('Aktif 24 jam', fmt(o.activeToday))}${c('TP diterbitkan', fmt(o.pointsIssued))}${c('TP dibelanjakan', fmt(o.pointsSpent))}
+      ${c('Misi diklaim', fmt(o.claims))}${c('Penukaran diproses', fmt(o.redemptionsPending))}${c('Fraud flag terbuka', fmt(o.openFraudFlags))}${c('Misi aktif', fmt(o.missionsPublished))}</div>
+      <h3>Misi terpopuler</h3>${table(['Misi', 'Penyelesaian'], o.topMissions.map((m) => `<tr><td>${esc(m.missionId)}</td><td>${fmt(m.completions)}</td></tr>`))}`;
+  },
+  async world() {
+    const w = await api('GET', '/content/world');
+    return `<h2>World & Map</h2><p class="sub">Zona dan objek interaktif dari <code>gameContent.json</code> (versi Phase 1: hanya baca; ubah file konten lalu rilis ulang).</p>
+      <h3>Zona (${w.zones.length})</h3>${table(['ID', 'Nama', 'Pusat (x,z)', 'Radius', 'Efek'], w.zones.map((z) => `<tr><td>${esc(z.id)}</td><td>${esc(z.name)}</td><td>${esc(z.center.join(', '))}</td><td>${esc(z.radius)}</td><td>${z.interference ? 'Gangguan sinyal' : ''}${z.hazard ? 'Hazard simulasi' : ''}</td></tr>`))}
+      <h3>Objek (${w.objects.length})</h3>${table(['ID', 'Tipe', 'Nama', 'Zona', 'Posisi', 'Aset'], w.objects.map((o) => `<tr><td>${esc(o.id)}</td><td>${esc(o.type)}</td><td>${esc(o.name)}</td><td>${esc(o.zone)}</td><td>${esc(o.position.join(', '))}</td><td>${esc(o.assetId || '')}</td></tr>`))}`;
+  },
+  async characters() {
+    const w = await api('GET', '/content/world');
+    const npcs = w.objects.filter((o) => o.type === 'npc');
+    return `<h2>Characters & NPC</h2><p class="sub">Karakter bermain berasal dari model GLB bawaan aplikasi; NPC dari konten dunia (hanya baca di Phase 1).</p>
+      <h3>Karakter pemain</h3>${table(['ID', 'Nama'], [['twini-idtc', 'Twini - IDTC'], ['insan-adhi', 'Insan Adhi'], ['insan-adhi-w01', 'Insan Adhi W01'], ['dni-01', 'Dani-01'], ['dni-02', 'Dani-02']].map(([id, n]) => `<tr><td>${id}</td><td>${n}</td></tr>`))}
+      <h3>NPC</h3>${table(['ID', 'Nama', 'Zona', 'Dialog'], npcs.map((n) => `<tr><td>${esc(n.id)}</td><td>${esc(n.name)}</td><td>${esc(n.zone)}</td><td>${esc(n.line)}</td></tr>`))}`;
+  },
+  async missions(filter) {
+    const { missions } = await api('GET', '/admin/missions');
+    const list = filter ? missions.filter(filter) : missions;
+    state.missions = missions;
+    return `<h2>${filter ? 'Event Management' : 'Mission Management'}</h2><p class="sub">Mission Builder: buat, ubah, publish, atau arsipkan misi tanpa mengubah kode game. Klien mengambil misi terbaru dari server.</p>
+      <div class="row"><button class="btn" data-new>+ Misi baru</button></div><div id="editor"></div>
+      ${table(['ID', 'Kategori', 'Judul', 'Kesulitan', 'Reward', 'Jadwal', 'Status', ''], list.map((m) => `<tr><td>${esc(m.id)}</td><td>${esc(m.category)}${m.chapter ? ` · Bab ${m.chapter}` : ''}</td><td>${esc(m.title)}</td><td>${esc(m.difficulty)}</td>
+        <td>${fmt(m.rewardTp)} TP · ${fmt(m.rewardXp)} XP${m.multiplier !== 1 ? ` · ×${m.multiplier}` : ''}</td><td>${m.startsAt ? `${date(m.startsAt)} – ${date(m.endsAt)}` : '–'}</td>
+        <td><span class="pill ${esc(m.status)}">${esc(m.status)}</span></td><td><button class="btn ghost" data-edit="${esc(m.id)}">Ubah</button></td></tr>`))}`;
+  },
+  events() { return VIEWS.missions((m) => m.category === 'special'); },
+  async assets() {
+    const { assets } = await api('GET', '/admin/assets');
+    state.assets = assets;
+    return `<h2>Digital Twin Asset Management</h2><p class="sub">Unggah model GLB (glTF 2.0 biner, maks 25 MB). Format FBX/OBJ/IFC/LAS/3D Tiles perlu dikonversi ke GLB terlebih dahulu (pipeline konversi: Phase 2).</p>
+      <div class="row"><button class="btn" data-new>+ Aset baru</button></div><div id="editor"></div>
+      ${table(['', 'ID', 'Nama', 'Kategori', 'Rarity', 'Level maks', 'Upgrade', 'Model', 'Status', ''], assets.map((a) => `<tr><td>${esc(a.icon)}</td><td>${esc(a.id)}</td><td>${esc(a.name)}</td><td>${esc(a.category)}</td><td>${esc(a.rarity)}</td><td>${a.maxLevel}</td><td>${fmt(a.upgradeCostTp)} TP</td>
+        <td>${a.modelUrl ? `<a style="color:var(--cyan)" href="${esc(a.modelUrl)}">GLB</a>` : a.modelRef ? esc(a.modelRef) : '–'}<br><input type="file" accept=".glb" data-upload="${esc(a.id)}" style="max-width:180px"></td>
+        <td><span class="pill ${esc(a.status)}">${esc(a.status)}</span></td><td><button class="btn ghost" data-edit="${esc(a.id)}">Ubah</button></td></tr>`))}`;
+  },
+  async products() {
+    const { products } = await api('GET', '/admin/products');
+    state.products = products;
+    return `<h2>Rewards & Merchandise</h2><p class="sub">Stok voucher dihitung dari kode voucher yang tersedia; stok merchandise diatur manual.</p>
+      <div class="row"><button class="btn" data-new>+ Produk baru</button></div><div id="editor"></div>
+      ${table(['', 'ID', 'Nama', 'Kategori', 'Harga', 'Stok', 'Limit/pemain', 'Status', ''], products.map((p) => `<tr><td>${esc(p.icon)}</td><td>${esc(p.id)}</td><td>${esc(p.name)}</td><td>${esc(p.category)}</td><td>${fmt(p.priceTp)} TP</td><td>${fmt(p.stock)}</td><td>${p.redemptionLimit}</td>
+        <td><span class="pill ${esc(p.status)}">${esc(p.status)}</span></td><td><button class="btn ghost" data-edit="${esc(p.id)}">Ubah</button></td></tr>`))}`;
+  },
+  async vouchers() {
+    const [{ products }, { vouchers }] = await Promise.all([api('GET', '/admin/products'), api('GET', '/admin/vouchers')]);
+    const opts = products.filter((p) => p.kind === 'voucher').map((p) => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('');
+    return `<h2>Voucher Management</h2><p class="sub">Buat kode acak internal, atau impor kode dari penyedia (satu per baris).</p>
+      <div class="panel"><div class="grid2"><div><label>Produk</label><select id="vp">${opts}</select></div><div><label>Jumlah kode acak</label><input id="vc" type="number" min="1" max="500" value="10"></div></div>
+      <label>Atau impor kode (opsional)</label><textarea id="vi" placeholder="KODE-1&#10;KODE-2"></textarea><div class="row"><button class="btn" id="vg">Simpan kode</button></div></div>
+      <div class="panel"><label>Validasi kode</label><div class="row"><input id="vv" style="max-width:280px"><button class="btn ghost" id="vb">Cek</button><span id="vr" class="muted"></span></div></div>
+      ${table(['Kode', 'Produk', 'Status', 'Redemption', 'Dibuat'], vouchers.map((v) => `<tr><td>${esc(v.code)}</td><td>${esc(v.productId)}</td><td><span class="pill ${esc(v.status)}">${esc(v.status)}</span></td><td>${esc(v.redemptionId || '')}</td><td>${date(v.createdAt)}</td></tr>`))}`;
+  },
+  async redemptions() {
+    const { redemptions } = await api('GET', '/admin/redemptions');
+    const next = { PENDING: ['CONFIRMED', 'CANCELLED'], CONFIRMED: ['PROCESSING', 'CANCELLED'], PROCESSING: ['SHIPPED', 'CANCELLED'], SHIPPED: ['DELIVERED'], REDEEMED: ['CANCELLED'] };
+    return `<h2>Redemptions</h2><p class="sub">PENDING = butuh review (pemain memiliki fraud flag). Pembatalan otomatis mengembalikan Twin Points.</p>
+      ${table(['Ref', 'Produk', 'Pemain', 'Harga', 'Status', 'Pengiriman', 'Tanggal', 'Aksi'], redemptions.map((r) => `<tr><td>${esc(r.reference)}</td><td>${esc(r.productIcon)} ${esc(r.productName)}</td><td>${esc(r.userId)}</td><td>${fmt(r.priceTp)}</td>
+        <td><span class="pill ${esc(r.status)}">${esc(r.status)}</span></td><td>${r.delivery?.name ? esc(`${r.delivery.name} · ${r.delivery.phone} · ${r.delivery.address}`) : '–'}</td><td>${date(r.createdAt)}</td>
+        <td>${(next[r.status] || []).map((s) => `<button class="btn ${s === 'CANCELLED' ? 'danger' : 'ghost'}" data-rs="${esc(r.id)}" data-status="${s}">${s}</button>`).join(' ')}</td></tr>`))}`;
+  },
+  async players() {
+    const { players } = await api('GET', '/admin/players');
+    return `<h2>Player Management</h2><p class="sub">Ubah role, bekukan akun, atau sesuaikan Twin Points (tercatat di audit log).</p>
+      ${table(['Nama', 'Email', 'Role', 'Status', 'XP', 'TP', 'Flag', 'Aksi'], players.map((p) => `<tr><td>${esc(p.fullName)}</td><td>${esc(p.email)}</td><td>${esc(p.role)}</td><td><span class="pill ${esc(p.status)}">${esc(p.status)}</span></td>
+        <td>${fmt(p.xp)}</td><td>${fmt(p.twinPoints)}</td><td>${p.openFlags || ''}</td><td>
+        <button class="btn ghost" data-role="${esc(p.id)}" data-value="${p.role === 'admin' ? 'player' : 'admin'}">${p.role === 'admin' ? 'Jadikan player' : 'Jadikan admin'}</button>
+        <button class="btn ${p.status === 'active' ? 'danger' : 'ghost'}" data-ban="${esc(p.id)}" data-value="${p.status === 'active' ? 'banned' : 'active'}">${p.status === 'active' ? 'Bekukan' : 'Aktifkan'}</button>
+        <button class="btn ghost" data-adjust="${esc(p.id)}">± TP</button></td></tr>`))}`;
+  },
+  async transactions() {
+    const { transactions, flags } = await api('GET', '/admin/transactions');
+    return `<h2>Twin Points & Fraud Detection</h2><p class="sub">Semua transaksi tervalidasi server dengan idempotency key unik.</p>
+      <h3>Fraud flags</h3>${table(['Waktu', 'Pemain', 'Alasan', 'Detail', ''], flags.map((f) => `<tr><td>${date(f.createdAt)}</td><td>${esc(f.email)}</td><td>${esc(f.reason)}</td><td>${esc(f.detail)}</td><td>${f.resolved ? 'Selesai' : `<button class="btn ghost" data-resolve="${f.id}">Tandai selesai</button>`}</td></tr>`))}
+      <h3>Transaksi</h3>${table(['Waktu', 'Pemain', 'Jumlah', 'Tipe', 'Sumber', 'Ref'], transactions.map((t) => `<tr><td>${date(t.createdAt)}</td><td>${esc(t.email)}</td><td style="color:${t.amount > 0 ? 'var(--green)' : 'var(--red)'}">${t.amount > 0 ? '+' : ''}${fmt(t.amount)}</td><td>${esc(t.type)}</td><td>${esc(t.source)}</td><td>${esc(t.ref)}</td></tr>`))}`;
+  },
+  async leaderboard() {
+    const [all, weekly] = await Promise.all([api('GET', '/admin/leaderboard'), api('GET', '/admin/leaderboard?period=weekly')]);
+    const t = (rows) => table(['#', 'Pemain', 'Level', 'TP diperoleh'], rows.map((r) => `<tr><td>${r.rank}</td><td>${esc(r.name)}</td><td>${r.level}</td><td>${fmt(r.points)}</td></tr>`));
+    return `<h2>Leaderboard</h2><p class="sub">Peringkat berdasarkan Twin Points yang diperoleh.</p><div class="grid2"><div><h3>Mingguan</h3>${t(weekly.leaderboard)}</div><div><h3>Sepanjang masa</h3>${t(all.leaderboard)}</div></div>`;
+  },
+  async config() {
+    const { config } = await api('GET', '/admin/config');
+    const labels = { globalMultiplier: 'Global reward multiplier', pointsExpiryDays: 'Masa berlaku poin (hari)', maxClaimsPerHour: 'Maks klaim misi per jam', dailyCheckinTp: 'TP login harian', fraudReviewThreshold: 'Ambang review fraud (jumlah flag)', timezoneOffsetMinutes: 'Offset zona waktu (menit, WIB = 420)' };
+    return `<h2>Game Configuration</h2><p class="sub">Aturan perolehan Twin Points dan anti-fraud.</p><form id="cf" class="panel"><div class="grid2">${Object.entries(labels).map(([k, l]) => `<div><label>${esc(l)}</label><input name="${k}" type="number" step="any" value="${esc(config[k])}"></div>`).join('')}</div><div class="row"><button class="btn">Simpan</button></div></form>`;
+  },
+  async audit() {
+    const { audit } = await api('GET', '/admin/audit');
+    return `<h2>Audit Log</h2><p class="sub">200 aksi admin terakhir.</p>${table(['Waktu', 'Admin', 'Aksi', 'Target', 'Detail'], audit.map((a) => `<tr><td>${date(a.created_at)}</td><td>${esc(a.actor_id)}</td><td>${esc(a.action)}</td><td>${esc(a.target)}</td><td>${esc(a.detail)}</td></tr>`))}`;
+  },
+};
+
+function missionForm(m = {}) {
+  return `<form id="mf" class="panel"><h3>${m.id ? `Ubah ${esc(m.id)}` : 'Misi baru'}</h3><div class="grid2">
+    <div><label>ID</label><input name="id" value="${esc(m.id)}" ${m.id ? 'readonly' : ''} required pattern="[a-z0-9-]{2,40}"></div>
+    <div><label>Kategori</label><select name="category">${['campaign', 'daily', 'weekly', 'special'].map((c) => `<option ${m.category === c ? 'selected' : ''}>${c}</option>`).join('')}</select></div>
+    <div><label>Judul</label><input name="title" value="${esc(m.title)}" required maxlength="80"></div>
+    <div><label>Kesulitan</label><select name="difficulty">${['easy', 'medium', 'hard', 'expert', 'legendary'].map((c) => `<option ${m.difficulty === c ? 'selected' : ''}>${c}</option>`).join('')}</select></div>
+    <div><label>Bab (campaign)</label><input name="chapter" type="number" value="${esc(m.chapter ?? '')}"></div><div><label>Judul bab</label><input name="chapterTitle" value="${esc(m.chapterTitle ?? '')}"></div>
+    <div><label>Urutan</label><input name="sort" type="number" value="${esc(m.sort ?? 0)}"></div><div><label>Zona awal</label><input name="startZone" value="${esc(m.startZone ?? '')}"></div>
+    <div><label>Reward TP</label><input name="rewardTp" type="number" min="0" max="5000" value="${esc(m.rewardTp ?? 100)}"></div><div><label>Reward XP</label><input name="rewardXp" type="number" min="0" value="${esc(m.rewardXp ?? 50)}"></div>
+    <div><label>Multiplier</label><input name="multiplier" type="number" step="0.1" value="${esc(m.multiplier ?? 1)}"></div><div><label>Batas waktu (detik, 0 = tanpa)</label><input name="timeLimitSec" type="number" value="${esc(m.timeLimitSec ?? 0)}"></div>
+    <div><label>Durasi minimum (anti-cheat, detik)</label><input name="minDurationSec" type="number" value="${esc(m.minDurationSec ?? 10)}"></div><div><label>Prasyarat (ID, pisah koma)</label><input name="requires" value="${esc((m.requires || []).join(','))}"></div>
+    <div><label>Reward aset (ID)</label><input name="rewardAssetId" value="${esc(m.rewardAssetId ?? '')}"></div>
+    <div><label>Mulai (ISO, event)</label><input name="startsAt" value="${esc(m.startsAt ?? '')}" placeholder="2027-08-10T00:00:00+07:00"></div><div><label>Berakhir</label><input name="endsAt" value="${esc(m.endsAt ?? '')}"></div>
+    <div><label>Status</label><select name="status">${['draft', 'published', 'archived'].map((c) => `<option ${m.status === c ? 'selected' : ''}>${c}</option>`).join('')}</select></div>
+    <div><label><input type="checkbox" name="triggersStorm" style="width:auto" ${m.triggersStorm ? 'checked' : ''}> Memicu badai</label></div></div>
+    <label>Deskripsi</label><textarea name="description" style="min-height:50px">${esc(m.description)}</textarea>
+    <label>Objektif (JSON). Event: explore_zone, collect_core, scan_object, activate_sensor, identify_pollution, repair_drainage, survive_storm, rescue_npc, restore_station, sync_object, infra_challenge, restore_core, find_treasure</label>
+    <textarea name="objectives">${esc(JSON.stringify(m.objectives || [{ event: 'collect_core', count: 3, label: 'Energy Core' }], null, 2))}</textarea>
+    <div class="row"><button class="btn">Simpan</button><button type="button" class="btn ghost" data-cancel>Batal</button></div></form>`;
+}
+
+function assetForm(a = {}) {
+  return `<form id="af" class="panel"><h3>${a.id ? `Ubah ${esc(a.id)}` : 'Aset baru'}</h3><div class="grid2">
+    <div><label>ID</label><input name="id" value="${esc(a.id)}" ${a.id ? 'readonly' : ''} required pattern="[a-z0-9-]{2,40}"></div><div><label>Nama</label><input name="name" value="${esc(a.name)}" required></div>
+    <div><label>Kategori</label><select name="category">${['Buildings', 'Roads and Bridges', 'Smart Infrastructure', 'IoT Sensors', 'CCTV', 'Transportation', 'Solar Energy', 'Water Management', 'Environmental Assets', 'Robotics and Drones', 'Digital Twin Equipment', 'Character Accessories'].map((c) => `<option ${a.category === c ? 'selected' : ''}>${c}</option>`).join('')}</select></div>
+    <div><label>Rarity</label><select name="rarity">${['common', 'rare', 'epic', 'legendary'].map((c) => `<option ${a.rarity === c ? 'selected' : ''}>${c}</option>`).join('')}</select></div>
+    <div><label>Ikon (emoji)</label><input name="icon" value="${esc(a.icon ?? '')}"></div><div><label>Level maks</label><input name="maxLevel" type="number" value="${esc(a.maxLevel ?? 3)}"></div>
+    <div><label>Biaya upgrade (TP × level)</label><input name="upgradeCostTp" type="number" value="${esc(a.upgradeCostTp ?? 50)}"></div>
+    <div><label>Status</label><select name="status">${['draft', 'published', 'archived'].map((c) => `<option ${a.status === c ? 'selected' : ''}>${c}</option>`).join('')}</select></div></div>
+    <label>Deskripsi</label><textarea name="description" style="min-height:50px">${esc(a.description)}</textarea>
+    <div class="grid2"><div><label>Properti fungsional (JSON)</label><textarea name="properties">${esc(JSON.stringify(a.properties || {}, null, 2))}</textarea></div>
+    <div><label>Syarat penemuan (JSON: {"objects":[…]} atau {"mission":"m01"})</label><textarea name="discovery">${esc(JSON.stringify(a.discovery || {}, null, 2))}</textarea></div>
+    <div><label>Aturan penempatan (JSON)</label><textarea name="placement">${esc(JSON.stringify(a.placement || {}, null, 2))}</textarea></div></div>
+    <div class="row"><button class="btn">Simpan</button><button type="button" class="btn ghost" data-cancel>Batal</button></div></form>`;
+}
+
+function productForm(p = {}) {
+  return `<form id="pf" class="panel"><h3>${p.id ? `Ubah ${esc(p.id)}` : 'Produk baru'}</h3><div class="grid2">
+    <div><label>ID</label><input name="id" value="${esc(p.id)}" ${p.id ? 'readonly' : ''} required pattern="[a-z0-9-]{2,40}"></div><div><label>Nama</label><input name="name" value="${esc(p.name)}" required></div>
+    <div><label>Kategori</label><select name="category">${['digital', 'merch'].map((c) => `<option ${p.category === c ? 'selected' : ''}>${c}</option>`).join('')}</select></div>
+    <div><label>Jenis</label><select name="kind">${['voucher', 'merch'].map((c) => `<option ${p.kind === c ? 'selected' : ''}>${c}</option>`).join('')}</select></div>
+    <div><label>Ikon (emoji)</label><input name="icon" value="${esc(p.icon ?? '')}"></div><div><label>Harga TP</label><input name="priceTp" type="number" min="1" value="${esc(p.priceTp ?? 1000)}"></div>
+    <div><label>Stok (merch)</label><input name="stock" type="number" min="0" value="${esc(p.kind === 'merch' ? p.stock ?? 0 : 0)}"></div><div><label>Limit per pemain</label><input name="redemptionLimit" type="number" min="1" value="${esc(p.redemptionLimit ?? 1)}"></div>
+    <div><label>Status</label><select name="status">${['active', 'inactive'].map((c) => `<option ${p.status === c ? 'selected' : ''}>${c}</option>`).join('')}</select></div></div>
+    <label>Deskripsi</label><input name="description" value="${esc(p.description ?? '')}"><label>Info pengiriman</label><input name="deliveryInfo" value="${esc(p.deliveryInfo ?? '')}">
+    <div class="row"><button class="btn">Simpan</button><button type="button" class="btn ghost" data-cancel>Batal</button></div></form>`;
+}
+
+const json = (text, name) => { try { return JSON.parse(text || '{}'); } catch { throw new Error(`${name} bukan JSON yang valid.`); } };
+const num = (v) => (v === '' || v == null ? null : Number(v));
+
+function bindEditor(formHtml, items, submit) {
+  const editor = document.getElementById('editor');
+  const open = (item) => {
+    editor.innerHTML = formHtml(item);
+    editor.querySelector('[data-cancel]').onclick = () => { editor.innerHTML = ''; };
+    editor.querySelector('form').onsubmit = (e) => { e.preventDefault(); act(() => submit(new FormData(e.target)), 'Tersimpan.'); };
+    editor.scrollIntoView({ behavior: 'smooth' });
+  };
+  document.querySelector('[data-new]').onclick = () => open();
+  document.querySelectorAll('[data-edit]').forEach((b) => b.onclick = () => open(items.find((i) => i.id === b.dataset.edit)));
+}
+
+const bindMissions = () => bindEditor(missionForm, state.missions, (f) => api('PUT', `/admin/missions/${encodeURIComponent(f.get('id'))}`, {
+  category: f.get('category'), title: f.get('title'), difficulty: f.get('difficulty'), chapter: num(f.get('chapter')), chapterTitle: f.get('chapterTitle') || null,
+  sort: Number(f.get('sort') || 0), startZone: f.get('startZone') || null, rewardTp: Number(f.get('rewardTp')), rewardXp: Number(f.get('rewardXp')),
+  multiplier: Number(f.get('multiplier') || 1), timeLimitSec: Number(f.get('timeLimitSec') || 0), minDurationSec: Number(f.get('minDurationSec') || 0),
+  requires: String(f.get('requires') || '').split(',').map((s) => s.trim()).filter(Boolean), rewardAssetId: f.get('rewardAssetId') || null,
+  startsAt: f.get('startsAt') || null, endsAt: f.get('endsAt') || null, status: f.get('status'), triggersStorm: f.get('triggersStorm') === 'on',
+  description: f.get('description'), objectives: json(f.get('objectives'), 'Objektif'),
+}));
+
+const bind = {
+  missions: bindMissions,
+  events: bindMissions,
+  assets() {
+    bindEditor(assetForm, state.assets, (f) => api('PUT', `/admin/assets/${encodeURIComponent(f.get('id'))}`, {
+      name: f.get('name'), category: f.get('category'), rarity: f.get('rarity'), icon: f.get('icon'), maxLevel: Number(f.get('maxLevel')), upgradeCostTp: Number(f.get('upgradeCostTp')),
+      status: f.get('status'), description: f.get('description'), properties: json(f.get('properties'), 'Properti'), discovery: json(f.get('discovery'), 'Penemuan'),
+      placement: json(f.get('placement'), 'Penempatan'), modelRef: state.assets.find((a) => a.id === f.get('id'))?.modelRef || null,
+    }));
+    document.querySelectorAll('[data-upload]').forEach((input) => input.onchange = () => {
+      const file = input.files[0];
+      if (file) act(async () => { const r = await api('POST', `/admin/assets/${encodeURIComponent(input.dataset.upload)}/model`, file, true); flash(`Model diunggah (${fmt(r.bytes)} byte).`); }, null);
+    });
+  },
+  products() {
+    bindEditor(productForm, state.products, (f) => api('PUT', `/admin/products/${encodeURIComponent(f.get('id'))}`, {
+      name: f.get('name'), category: f.get('category'), kind: f.get('kind'), icon: f.get('icon'), priceTp: Number(f.get('priceTp')), stock: Number(f.get('stock') || 0),
+      redemptionLimit: Number(f.get('redemptionLimit') || 1), status: f.get('status'), description: f.get('description'), deliveryInfo: f.get('deliveryInfo'),
+    }));
+  },
+  vouchers() {
+    document.getElementById('vg').onclick = () => act(async () => {
+      const codes = document.getElementById('vi').value.split('\n').map((s) => s.trim()).filter(Boolean);
+      const r = await api('POST', '/admin/vouchers/generate', { productId: document.getElementById('vp').value, count: Number(document.getElementById('vc').value), codes });
+      flash(`${r.inserted} kode tersimpan.`);
+    }, null);
+    document.getElementById('vb').onclick = async () => {
+      try { const r = await api('GET', `/admin/vouchers/validate?code=${encodeURIComponent(document.getElementById('vv').value)}`); document.getElementById('vr').textContent = `${r.status}${r.productId ? ` · ${r.productId}` : ''}${r.reference ? ` · ${r.reference} (${r.redemptionStatus})` : ''}`; }
+      catch (e) { flash(e.message, false); }
+    };
+  },
+  redemptions() {
+    document.querySelectorAll('[data-rs]').forEach((b) => b.onclick = () => {
+      if (b.dataset.status === 'CANCELLED' && !confirm('Batalkan penukaran ini? Twin Points akan dikembalikan ke pemain.')) return;
+      act(() => api('POST', `/admin/redemptions/${b.dataset.rs}/status`, { status: b.dataset.status }), `Status diubah ke ${b.dataset.status}.`);
+    });
+  },
+  players() {
+    document.querySelectorAll('[data-role]').forEach((b) => b.onclick = () => act(() => api('PATCH', `/admin/players/${b.dataset.role}`, { role: b.dataset.value }), 'Role diperbarui.'));
+    document.querySelectorAll('[data-ban]').forEach((b) => b.onclick = () => { if (confirm('Ubah status akun ini?')) act(() => api('PATCH', `/admin/players/${b.dataset.ban}`, { status: b.dataset.value }), 'Status diperbarui.'); });
+    document.querySelectorAll('[data-adjust]').forEach((b) => b.onclick = () => {
+      const amount = prompt('Jumlah TP (negatif untuk mengurangi):'); if (!amount) return;
+      const reason = prompt('Alasan penyesuaian:'); if (!reason) return;
+      act(() => api('POST', `/admin/players/${b.dataset.adjust}/points`, { amount: Number(amount), reason }), 'Twin Points disesuaikan.');
+    });
+  },
+  transactions() { document.querySelectorAll('[data-resolve]').forEach((b) => b.onclick = () => act(() => api('POST', `/admin/fraud/${b.dataset.resolve}/resolve`), 'Flag diselesaikan.')); },
+  config() {
+    document.getElementById('cf').onsubmit = (e) => { e.preventDefault(); const f = new FormData(e.target); act(() => api('PUT', '/admin/config', Object.fromEntries([...f.entries()].map(([k, v]) => [k, Number(v)]))), 'Konfigurasi disimpan.'); };
+  },
+};
+
+(async () => {
+  if (!state.token) return renderLogin();
+  try { const { user } = await api('GET', '/auth/me'); if (user.role !== 'admin') return logout(); state.user = user; renderShell(); } catch { renderLogin(); }
+})();
+</script>
+</body>
+</html>

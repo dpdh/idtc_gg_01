@@ -1,10 +1,13 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { removeCredential, saveCredential, verifyCredential } from './credentialStore';
+import { cloudSignOut, linkCloudAccountInBackground } from '../../game/services/cloudAccount';
 
 const USERS_KEY = '@twini/users/v1';
 const SESSION_KEY = '@twini/session/v1';
 const AuthContext = createContext(null);
+// Local demo account seeded on first launch. Its password is public in the source, so it is never linked to the cloud backend.
+const SEED_ADMIN = { email: 'dani.hd@idtc.org', password: 'Superadmin@88' };
 
 const normalizeEmail = (email) => email.trim().toLowerCase();
 const makeId = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
@@ -44,13 +47,18 @@ export function AuthProvider({ children }) {
 
   useEffect(() => {
     let mounted = true;
-    (async () => {
+    ;(async () => {
       try {
         const [sessionId, users] = await Promise.all([
           AsyncStorage.getItem(SESSION_KEY),
           readUsers(),
         ]);
         if (mounted && sessionId) setUser(users.find((item) => item.id === sessionId) || null);
+        // Register default admin user if no users exist
+        if (mounted && !users.length) {
+          await register({ fullName: 'Admin', email: SEED_ADMIN.email, organization: 'IDTC', industry: 'Digital Twin', country: 'Indonesia' }, SEED_ADMIN.password, { linkCloud: false });
+          setUser(users.find((item) => item.id === sessionId) || null);
+        }
       } catch {
         if (mounted) setUser(null);
       } finally {
@@ -60,7 +68,7 @@ export function AuthProvider({ children }) {
     return () => { mounted = false; };
   }, []);
 
-  const register = useCallback(async (profile, password) => {
+  const register = useCallback(async (profile, password, { linkCloud = true } = {}) => {
     const fullName = (profile.fullName || '').trim();
     if (!fullName) throw new Error('Enter your full name.');
     const email = validateEmail(profile.email);
@@ -91,6 +99,8 @@ export function AuthProvider({ children }) {
       throw error;
     }
     setUser(nextUser);
+    // Link a game-backend account for server-validated Twin Points (best effort, works offline).
+    if (linkCloud) linkCloudAccountInBackground(email, password, fullName);
     return nextUser;
   }, []);
 
@@ -104,6 +114,7 @@ export function AuthProvider({ children }) {
     }
     await AsyncStorage.setItem(SESSION_KEY, account.id);
     setUser(account);
+    if (!(email === SEED_ADMIN.email && password === SEED_ADMIN.password)) linkCloudAccountInBackground(email, password, account.fullName);
     return account;
   }, []);
 
@@ -140,6 +151,7 @@ export function AuthProvider({ children }) {
   }, [user]);
 
   const logout = useCallback(async () => {
+    await cloudSignOut();
     await AsyncStorage.removeItem(SESSION_KEY);
     setUser(null);
   }, []);
