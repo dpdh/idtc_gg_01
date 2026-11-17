@@ -1,11 +1,16 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Animated, Image, Linking, Modal, PanResponder, Platform, Pressable, ScrollView, StatusBar, StyleSheet, Text, TextInput, TouchableOpacity, View, useWindowDimensions } from 'react-native';
 import * as ScreenOrientation from 'expo-screen-orientation';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { FontAwesomeIcon } from '@fortawesome/react-native-fontawesome';
-import { faArrowDown, faArrowLeft, faArrowUp, faBars, faBatteryThreeQuarters, faBolt, faBoxOpen, faChevronRight, faCloudSun, faCompass, faCrosshairs, faCube, faDroplet, faGamepad, faGear, faHandSparkles, faHeart, faInfoCircle, faKey, faKitMedical, faLocationArrow, faMagnifyingGlassPlus, faMapLocationDot, faPlay, faPlus, faMinus, faRankingStar, faSearch, faShieldHeart, faStore, faTowerBroadcast, faTrophy, faUser, faVideo, faWallet, faWifi, faWind, faXmark } from '@fortawesome/free-solid-svg-icons';
+import { FontAwesomeIcon } from '../../../shared/components/Icon';
+import { faArrowDown, faArrowLeft, faArrowRightFromBracket, faArrowUp, faBars, faBullseye, faCar, faMotorcycle, faMusic, faShip, faVolumeXmark, faWandMagicSparkles, faBatteryThreeQuarters, faBolt, faBoxOpen, faChevronRight, faCloudSun, faCompass, faCrosshairs, faCube, faDroplet, faGamepad, faGear, faHandSparkles, faHeart, faInfoCircle, faKey, faKitMedical, faLocationArrow, faMagnifyingGlassPlus, faMapLocationDot, faPlay, faPlus, faMinus, faRankingStar, faSearch, faShieldHeart, faShirt, faStore, faTowerBroadcast, faTrophy, faUser, faVideo, faWallet, faWifi, faWind, faXmark } from '@fortawesome/free-solid-svg-icons';
 import ResponsiveContent from '../../../shared/components/ResponsiveContent';
+import { LinearGradient } from 'expo-linear-gradient';
+import TwiniMenuBackdrop, { CyclingTwini, MenuOverlayFx, useHappyMusic } from '../components/TwiniMenuBackdrop';
+import { ENVIRONMENTS, DEFAULT_ENVIRONMENT, environmentById, localizeLandmark, localizeObject, localizeTarget, localizeZone } from '../data/environments';
 import SurvivalWorldScene, { MONAS_TOWER_HALF, RUN_SPEED, WALK_SPEED } from '../components/SurvivalWorldScene';
+import { VEHICLE_TYPES, seatOf, spawnVehicles, vehicleLocalToWorld } from '../components/Vehicles';
+import { PIER, WADE_R } from '../components/Ocean';
 import OpenStreetMapEmbed from '../../maps/components/OpenStreetMapEmbed';
 import glbModels from '../../library/data/glbModels';
 import { useAuth } from '../../auth/data/AuthContext';
@@ -14,9 +19,45 @@ import { STATUS, progressRatio, remainingSeconds } from '../../game/engine/missi
 import { OBJECT_TYPES, WEATHER_LABEL, WORLD_OBJECTS, ZONES, ambientWeatherAt, lightingFor, nearestInteractable, safeZoneAt, tickSurvival, timeOfDayAt, zoneAt } from '../../game/engine/worldRules';
 import MissionCenter from '../../game/components/MissionCenter';
 import TwinHub from '../../game/components/TwinHub';
+import CityGrowthPanel from '../../game/components/CityGrowthPanel';
+import DistrictPanel from '../../game/components/DistrictPanel';
+import CosmeticsPanel from '../../game/components/CosmeticsPanel';
+import CoopPanel from '../../game/components/CoopPanel';
+import { coopApi } from '../../game/services/coopApi';
+import { addGrowthPoints, buildOnPlot, createGrowthState, normalizeGrowthState, recordWabahDown } from '../../game/engine/cityGrowth';
+import { buildOnDistrictPlot, buyPlot, collectDistrictIncome, createDistrictState, districtSummary, normalizeDistrictState } from '../../game/engine/district';
+import { applyProfileToAll, buyCosmetic, cosmeticsForDisciplineChange, cosmeticsSummary, defaultCosmetics, equipCosmetic, normalizeCosmetics, profileFor, toggleCosmeticSlot, unequipCosmeticSlot } from '../../game/engine/cosmetics';
+import { DISTRICT_PLOTS } from '../data/districtPlots';
+import { SLOT_META } from '../data/disciplineCosmetics';
+import { DISCIPLINES, DEFAULT_DISCIPLINE, disciplineById, disciplineEffects } from '../data/disciplines';
+import { WABAH_SPAWNS, wabahType } from '../data/wabah';
+import { NPCS, npcById } from '../data/npcs';
+import { startPointFor } from '../data/startPoints';
+import { SHOP_DISTRICT, nearestShopBuilding } from '../data/shopDistrict';
+import ShopPanel from '../../game/components/ShopPanel';
+import NpcDialogue from '../../game/components/NpcDialogue';
+import {
+  buildingUpgradeBonus as buildingBonusFor, buyAccessory, buyBuildingUpgrade, buyVehicleUpgrade, buyWeapon,
+  createLoadout, equipWeapon, normalizeLoadout, shotIntervalMs, toggleAccessory,
+  vehicleStats as vehicleStatsFor, weaponStats as weaponStatsFor,
+} from '../engine/loadout';
 import { MissionCompleteBanner, QuizPanel, ScanProgress, TwinInfoPanel } from '../../game/components/InteractionPanels';
 
 const PLAYABLE_CHARACTERS = glbModels.filter(({ id }) => ['twini-idtc', 'insan-adhi', 'insan-adhi-w01', 'dni-01', 'dni-02'].includes(id));
+
+// Thumbnail art per playable character (reuses the bundled role renders, so no extra asset weight).
+// Shown instead of the old "3D GLB" text labels in the TWINI menu and the character settings sheet.
+const CHARACTER_ART = {
+  'twini-idtc': require('../../../assets/splash/twini_engineer.jpg'),
+  'insan-adhi': require('../../../assets/splash/twini_scientist.jpg'),
+  'insan-adhi-w01': require('../../../assets/splash/twini_geodesy.jpg'),
+  'dni-01': require('../../../assets/splash/twini_mechanical.jpg'),
+  'dni-02': require('../../../assets/splash/twini_urban.jpg'),
+};
+const characterArt = (id) => CHARACTER_ART[id] || CHARACTER_ART['twini-idtc'];
+// Profil aksesori dibuat untuk setiap karakter yang bisa dimainkan.
+const CHARACTER_IDS = PLAYABLE_CHARACTERS.map((character) => character.id);
+const CHARACTER_PROFILES = PLAYABLE_CHARACTERS.map((character) => ({ id: character.id, name: character.name, art: characterArt(character.id) }));
 
 const LANDMARKS = [
   { id: 'monas', name: 'Monumen Nasional', short: 'MONAS', position: [0, 7.5] },
@@ -50,6 +91,9 @@ const PATROL_PATTERN = [
   { label: 'tengah', dx: 0, dz: 0 },
 ];
 const SECRET_CODE = 'jayajaya';
+const MAX_AMMO = 10;
+const TELEPORT_COST = 4;
+const VEHICLE_ICON = { car: faCar, motor: faMotorcycle, boat: faShip };
 const formatTime = (seconds) => `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
 
 class WorldSceneBoundary extends React.Component {
@@ -78,7 +122,7 @@ function ResourceBar({ label, value, color, icon, compact = false }) {
   </View>;
 }
 
-const MiniMap = React.memo(function MiniMap({ playerPosition, targets = [], size = 78, label = 'MONAS ZONE' }) {
+const MiniMap = React.memo(function MiniMap({ playerPosition, targets = [], vehicles = [], wabah = [], size = 78, label = 'MONAS ZONE' }) {
   const k = size / 78;
   const pos = ([x, z], margin = 5) => ({ left: `${Math.max(margin, Math.min(100 - margin, 50 + x * MAP_SCALE))}%`, top: `${Math.max(margin, Math.min(100 - margin, 50 + z * MAP_SCALE))}%` });
   return <View style={[styles.miniMap, { width: size, height: size }]}>
@@ -86,10 +130,13 @@ const MiniMap = React.memo(function MiniMap({ playerPosition, targets = [], size
     {ZONES.map((zone) => <View key={zone.id} style={[styles.miniZone, pos(zone.center, 4), { borderColor: zone.color, width: zone.radius * MAP_SCALE * 2.2 * k, height: zone.radius * MAP_SCALE * 2.2 * k, marginLeft: -zone.radius * MAP_SCALE * 1.1 * k, marginTop: -zone.radius * MAP_SCALE * 1.1 * k }]} />)}
     <View style={[styles.miniMonas, { left: '50%', top: '50%' }]} />
     {targets.map((object) => <View key={object.id} style={[styles.miniPoi, pos(object.position, 6), { backgroundColor: OBJECT_TYPES[object.type].color }]} />)}
+    {vehicles.map((v, i) => <View key={`v${i}`} style={[styles.miniVehicle, pos(v, 6)]} />)}
+    {wabah.map((spawn) => <View key={spawn.id} style={[styles.miniWabah, pos(spawn.position, 6), { backgroundColor: wabahType(spawn.kind).color }]} />)}
     <View style={[styles.miniPlayer, pos(playerPosition)]} />
     <Text numberOfLines={1} style={styles.miniMapLabel}>{label}</Text>
   </View>;
-}, (a, b) => a.size === b.size && a.label === b.label
+}, (a, b) => a.size === b.size && a.label === b.label && (a.vehicles || []).join() === (b.vehicles || []).join()
+  && (a.wabah || []).map((w) => w.id).join() === (b.wabah || []).map((w) => w.id).join()
   && (a.targets || []).map((t) => t.id).join() === (b.targets || []).map((t) => t.id).join()
   && Math.abs(a.playerPosition[0] - b.playerPosition[0]) < 0.4 && Math.abs(a.playerPosition[1] - b.playerPosition[1]) < 0.4);
 
@@ -127,11 +174,62 @@ const StatusStack = React.memo(function StatusStack({ width, values }) {
   </View>;
 }, (a, b) => a.width === b.width && a.values.every((v, i) => v === b.values[i]));
 
+function LiveSpeedometer({ controlRef, boost, bottom }) {
+  const [kmh, setKmh] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setKmh(Math.round(Math.abs(controlRef.current?.vehicle?.speed || 0) * 5)), 150);
+    return () => clearInterval(id);
+  }, [controlRef]);
+  const v = controlRef.current?.vehicle;
+  if (!v) return null;
+  return <View pointerEvents="none" style={[styles.speedo, { bottom }]}>
+    <FontAwesomeIcon icon={VEHICLE_ICON[v.type]} size={13} color="#7fe7ff" />
+    <Text style={styles.speedoValue}>{kmh}</Text>
+    <Text style={styles.speedoUnit}>km/j{boost ? ' · TURBO' : ''}</Text>
+  </View>;
+}
+
+// Mini map fed straight from the live movement controller: it refreshes on its own (4x/s) without
+// re-rendering the whole game screen.
+function LiveMiniMap({ controlRef, fallback, ...rest }) {
+  const [pos, setPos] = useState(fallback);
+  const [vehicles, setVehicles] = useState([]);
+  useEffect(() => {
+    const id = setInterval(() => {
+      const c = controlRef.current;
+      const p = c?.pos;
+      if (p) setPos((prev) => (Math.hypot(prev[0] - p[0], prev[1] - p[1]) > 0.3 ? [p[0], p[1]] : prev));
+      // Free vehicles show as green squares.
+      const list = (c?.vehicles || []).filter((v) => v !== c.vehicle).map((v) => [Math.round(v.pos[0]), Math.round(v.pos[1])]);
+      setVehicles((prev) => (prev.join() === list.join() ? prev : list));
+    }, 250);
+    return () => clearInterval(id);
+  }, [controlRef]);
+  return <MiniMap playerPosition={pos} vehicles={vehicles} {...rest} />;
+}
+
+// Environment picker: same missions, different world. Used on the TWINI menu and in the in-game settings.
+function EnvironmentPicker({ value, onChange, compact = false }) {
+  return <View style={styles.envGrid}>
+    {ENVIRONMENTS.map((env) => {
+      const selected = env.id === value;
+      return <TouchableOpacity key={env.id} onPress={() => onChange(env.id)} activeOpacity={0.8} style={[styles.envCard, compact && styles.envCardCompact, selected && { borderColor: env.accent, backgroundColor: `${env.accent}22` }]} accessibilityRole="button" accessibilityState={{ selected }} accessibilityLabel={`Pilih environment ${env.name}`}>
+        <Text style={styles.envEmoji}>{env.emoji}</Text>
+        <View style={{ flex: 1 }}>
+          <Text numberOfLines={1} style={[styles.envName, selected && { color: env.accent }]}>{env.name}</Text>
+          {!compact ? <Text numberOfLines={1} style={styles.envSubtitle}>{env.subtitle}</Text> : null}
+        </View>
+        {selected ? <Text style={[styles.envCheck, { color: env.accent }]}>✓</Text> : null}
+      </TouchableOpacity>;
+    })}
+  </View>;
+}
+
 const WORLD_HALF = 50 / MAP_SCALE; // the mini-map spans +-43.5 world units
 const clampValue = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 
 // Enlarged map (tap the mini-map): zoom 1x-4x centred on Twini, labels, facing arrow; tap a spot to set a waypoint.
-function WorldMap({ size, zoom, playerPosition, facing, targets = [], pickups = [], guide, onPickPoint }) {
+function WorldMap({ size, zoom, playerPosition, facing, targets = [], pickups = [], vehicles = [], wabah = [], guide, onPickPoint, envId = DEFAULT_ENVIRONMENT }) {
   const half = WORLD_HALF / zoom;
   const cx = zoom > 1 ? clampValue(playerPosition[0], -WORLD_HALF + half, WORLD_HALF - half) : 0;
   const cz = zoom > 1 ? clampValue(playerPosition[1], -WORLD_HALF + half, WORLD_HALF - half) : 0;
@@ -157,15 +255,17 @@ function WorldMap({ size, zoom, playerPosition, facing, targets = [], pickups = 
         const r = zone.radius * k;
         if (!inside(c, r)) return null;
         return <View key={zone.id} style={[styles.bigMapZone, { left: c.left - r, top: c.top - r, width: r * 2, height: r * 2, borderRadius: r, borderColor: zone.color, backgroundColor: `${zone.color}14`, justifyContent: 'flex-start', paddingTop: Math.max(4, r * 0.22) }]}>
-          <Text numberOfLines={1} style={[styles.bigMapZoneLabel, { color: zone.color }]}>{zone.short}</Text>
+          <Text numberOfLines={1} style={[styles.bigMapZoneLabel, { color: zone.color }]}>{localizeZone(envId, zone).short}</Text>
         </View>;
       })}
       {LANDMARKS.map((landmark) => {
         const c = toPx(landmark.position);
         if (!inside(c)) return null;
-        return <View key={landmark.id} style={[styles.bigMapLandmark, { left: c.left, top: c.top }]}><View style={styles.bigMapLandmarkDot} /><Text numberOfLines={1} style={styles.bigMapLandmarkText}>{landmark.short}</Text></View>;
+        return <View key={landmark.id} style={[styles.bigMapLandmark, { left: c.left, top: c.top }]}><View style={styles.bigMapLandmarkDot} /><Text numberOfLines={1} style={styles.bigMapLandmarkText}>{localizeLandmark(envId, landmark).short}</Text></View>;
       })}
       {pickups.map((position, index) => { const c = toPx(position); return inside(c) ? <View key={`p${index}`} style={[styles.bigMapPickup, c]} /> : null; })}
+      {vehicles.map((v) => { const c = toPx(v.pos); return inside(c) ? <Text key={v.id} style={[styles.bigMapVehicle, c]}>{VEHICLE_TYPES[v.type].emoji}</Text> : null; })}
+      {wabah.map((spawn) => { const c = toPx(spawn.position); return inside(c) ? <Text key={spawn.id} style={[styles.bigMapWabah, c]}>{wabahType(spawn.kind).icon}</Text> : null; })}
       {targets.map((object) => { const c = toPx(object.position); return inside(c) ? <View key={object.id} style={[styles.bigMapTarget, c, { borderColor: OBJECT_TYPES[object.type].color, backgroundColor: `${OBJECT_TYPES[object.type].color}66` }]} /> : null; })}
       {(() => { const c = toPx([0, 0]); return inside(c) ? <View style={[styles.bigMapMonas, c]} /> : null; })()}
       {guide ? (() => { const c = toPx(guide.position); return inside(c) ? <View style={[styles.bigMapGuide, c]} /> : null; })() : null}
@@ -187,6 +287,8 @@ export default function TwiniSurvivalScreen({ navigation }) {
   const [cheatCode, setCheatCode] = useState('');
   const cheatTimer = useRef(null);
   const [selectedCharacterId, setSelectedCharacterId] = useState('twini-idtc');
+  const [environmentId, setEnvironmentId] = useState(DEFAULT_ENVIRONMENT);
+  const environment = environmentById(environmentId);
   const [showCharacterSettings, setShowCharacterSettings] = useState(false);
   const selectedCharacter = PLAYABLE_CHARACTERS.find(({ id }) => id === selectedCharacterId) || PLAYABLE_CHARACTERS[0];
   const [playerPosition, setPlayerPosition] = useState([0, 8]); // Awal di pelataran depan Monas, area kotak luas ±138
@@ -219,8 +321,62 @@ export default function TwiniSurvivalScreen({ navigation }) {
   const pickupTimes = useRef({});
   const survivalTick = useRef(null);
   const [message, setMessage] = useState('Selamat datang di Digital Twin Jakarta.');
+  // Disiplin ilmu karakter + ruangan co-op aktif. Declared before useTwinGame because the game hook
+  // receives their refs/callbacks, and because it feeds the perk values into every reward.
+  const [growth, setGrowth] = useState(createGrowthState);
+  const [district, setDistrict] = useState(createDistrictState);
+  const [cosmetics, setCosmetics] = useState(() => defaultCosmetics(DEFAULT_DISCIPLINE, CHARACTER_IDS));
+  const [districtNotice, setDistrictNotice] = useState('');
+  const [cosmeticsNotice, setCosmeticsNotice] = useState('');
+  const [disciplineId, setDisciplineId] = useState(DEFAULT_DISCIPLINE);
+  // Loadout (senjata/aksesori/upgrade) + dialog warga. `loadout` disimpan di saveExtra.
+  const [loadout, setLoadout] = useState(createLoadout);
+  const [shopNotice, setShopNotice] = useState('');
+  const [shopTab, setShopTab] = useState('weapons');
+  const [npcTalk, setNpcTalk] = useState(null); // { id, line, claimed }
+  const talkedNpcs = useRef([]);
+  const weapon = useMemo(() => weaponStatsFor(loadout), [loadout]);
+  const cityBonus = useMemo(() => buildingBonusFor(loadout), [loadout]);
+  const vehiclePerf = useMemo(() => vehicleStatsFor(loadout), [loadout]);
+  const [coopCode, setCoopCode] = useState(null);
+  const [coopRoom, setCoopRoom] = useState(null);
+  const perks = useMemo(() => disciplineEffects(disciplineId), [disciplineId]);
+  const ammoCap = weapon.ammo + (perks.ammoBonus || 0);
+  const interactRadius = 2.6 + (perks.interactRadius || 0);
+  const coopRef = useRef({ code: null, token: null });
+  const coopLastReport = useRef({});
+  const perksRef = useRef(perks);
+  perksRef.current = perks;
   const { user } = useAuth();
-  const twin = useTwinGame({ userKey: user?.id || 'guest', onMissionComplete: (mission) => mission && setBanner(mission), onNotice: (text) => setMessage(text) });
+  // Event gameplay diteruskan ke ruangan co-op (jika ada); server menggabungkan progres tim.
+  const reportCoop = useCallback((event) => {
+    const { code, token } = coopRef.current;
+    if (!code || !token || !event?.type) return;
+    const key = `${event.type}:${event.target || ''}`;
+    const nowMs = Date.now();
+    if (coopLastReport.current[key] && nowMs - coopLastReport.current[key] < 600) return;
+    coopLastReport.current[key] = nowMs;
+    coopApi.reportProgress(token, code, { event: event.type, amount: event.amount || 1, target: event.target })
+      .then((room) => { if (room) setCoopRoom(room); })
+      .catch(() => {});
+  }, []);
+  const twin = useTwinGame({
+    userKey: user?.id || 'guest',
+    onMissionComplete: (mission) => {
+      if (!mission) return;
+      setBanner(mission);
+      const extra = perksRef.current.growthMission || 0;
+      if (extra) setGrowth((state) => addGrowthPoints(state, extra));
+    },
+    onNotice: (text) => setMessage(text),
+    onEvent: reportCoop,
+  });
+  coopRef.current = { code: coopCode, token: twin.session?.token || null };
+  // XP dengan bonus disiplin (Data Science +20%, dsb).
+  const gainXp = useCallback((amount) => {
+    const value = Math.max(0, Math.round(Number(amount || 0) * (1 + (perksRef.current.xpBonus || 0))));
+    if (value) setXp((current) => current + value);
+  }, []);
   const [running, setRunning] = useState(false);
   const runningRef = useRef(running);
   runningRef.current = running;
@@ -231,6 +387,19 @@ export default function TwiniSurvivalScreen({ navigation }) {
   const [focusSignal, setFocusSignal] = useState(0);
   const [guide, setGuide] = useState(null);
   const guideTimer = useRef(null);
+  // Vehicles, launcher and teleport.
+  const [riding, setRiding] = useState(null); // { id, type, name } while driving
+  const [nearVehicle, setNearVehicle] = useState(null);
+  const [ammo, setAmmo] = useState(MAX_AMMO);
+  const [dronesDown, setDronesDown] = useState(0);
+  const [showTeleport, setShowTeleport] = useState(false);
+  const lastShot = useRef(0);
+  const lastTeleport = useRef(0);
+  // Wabah panel → fire is queued until the 3D scene of the game panel is mounted.
+  const wabahFireAt = useRef(0);
+  // Happy background tune: full volume in the menus, quiet under the game.
+  const [musicOn, setMusicOn] = useState(true);
+  const musicAvailable = useHappyMusic(musicOn, panel === 'game' ? 0.25 : 0.6);
   const [showMap, setShowMap] = useState(false);
   const [mapZoom, setMapZoom] = useState(2);
   const [nearbyLandmark, setNearbyLandmark] = useState(null);
@@ -270,7 +439,7 @@ export default function TwiniSurvivalScreen({ navigation }) {
       onShouldBlockNativeResponder: () => true,
     });
   }
-  if (!moveControl.current) moveControl.current = { input: { dx: 0, dz: 0 }, auto: null, pos: [playerPosition[0], playerPosition[1]], vel: [0, 0], facing: { dx: 0, dz: 1 }, running: false, enabled: true, distance: 0, dashT: 0, dashV: [0, 0], lockFacing: false, speed: 0 };
+  if (!moveControl.current) moveControl.current = { input: { dx: 0, dz: 0 }, auto: null, pos: [playerPosition[0], playerPosition[1]], vel: [0, 0], facing: { dx: 0, dz: 1 }, running: false, enabled: true, distance: 0, dashT: 0, dashV: [0, 0], lockFacing: false, speed: 0, vehicle: null, vehicles: [], seat: null, fireSeq: 0, teleport: null, onCombat: null };
   moveControl.current.running = running;
   moveControl.current.exhausted = energy <= 0 || stamina <= 0;
   const setMoving = (value) => { movingRef.current = value; setMovingRaw(value); };
@@ -322,6 +491,7 @@ export default function TwiniSurvivalScreen({ navigation }) {
       const next = survivalClock.current + 1;
       survivalClock.current = next;
       setSurvivalSeconds(next);
+      setAmmo((value) => (value >= ammoCap ? value : value + 1));
       if (runningRef.current) runTimeRef.current += 1;
       // Stamina only drains while running and recovers otherwise (faster when standing still).
       else setStamina((value) => (value >= 100 ? value : Math.min(100, value + (movingRef.current ? 3 : 6))));
@@ -330,7 +500,9 @@ export default function TwiniSurvivalScreen({ navigation }) {
       survivalTick.current?.();
     }, 1000);
     return () => clearInterval(timer.current);
-  }, [panel, gameComplete]);
+  }, [panel, gameComplete, ammoCap]);
+  // Senjata baru punya kapasitas sel berbeda: jangan biarkan ammo melebihi kapasitas.
+  useEffect(() => { setAmmo((value) => Math.min(value, ammoCap)); }, [ammoCap]);
   useEffect(() => () => {
     clearTimeout(jumpTimer.current);
     clearInterval(movementTimer.current);
@@ -344,6 +516,7 @@ export default function TwiniSurvivalScreen({ navigation }) {
   useEffect(() => {
     if (syncedPos.current.has(playerPosition)) return;
     const control = moveControl.current;
+    if (control.vehicle) { control.vehicle.speed = 0; control.vehicle.vel = [0, 0]; control.vehicle = null; control.seat = null; setRiding(null); }
     control.pos[0] = playerPosition[0];
     control.pos[1] = playerPosition[1];
     control.vel[0] = 0;
@@ -376,7 +549,23 @@ export default function TwiniSurvivalScreen({ navigation }) {
   // ---------- campaign, world & survival (mission engine) ----------
   const campaignMissions = twin.missions.filter((mission) => mission.category === 'campaign');
   const completedMissions = campaignMissions.filter((mission) => twin.completedSet.has(mission.id)).length;
-  const nearTarget = panel === 'game' && !interaction ? nearestInteractable(playerPosition, twin.objectState) : null;
+  const nearTarget = panel === 'game' && !interaction ? localizeTarget(environmentId, nearestInteractable(playerPosition, twin.objectState, Date.now(), interactRadius)) : null;
+  // Warga terdekat (radius 2.8 m). INTERACT memprioritaskan percakapan sebelum objek misi.
+  const nearNpc = useMemo(() => {
+    if (panel !== 'game' || interaction || npcTalk) return null;
+    let best = null;
+    NPCS.forEach((npc) => {
+      const distance = Math.hypot(npc.position[0] - playerPosition[0], npc.position[1] - playerPosition[1]);
+      if (distance <= 2.8 && (!best || distance < best.distance)) best = { npc, distance };
+    });
+    return best ? best.npc : null;
+  }, [panel, interaction, npcTalk, playerPosition]);
+  // Pintu bangunan distrik toko terdekat (radius 3,2 m) → INTERACT membuka tab toko yang sesuai.
+  const nearShop = useMemo(() => {
+    if (panel !== 'game' || interaction || npcTalk) return null;
+    const hit = nearestShopBuilding(playerPosition[0], playerPosition[1]);
+    return hit ? hit.building : null;
+  }, [panel, interaction, npcTalk, playerPosition]);
   useEffect(() => {
     if (guide && Math.hypot(guide.position[0] - playerPosition[0], guide.position[1] - playerPosition[1]) < 1.4) {
       setGuide(null);
@@ -404,7 +593,7 @@ export default function TwiniSurvivalScreen({ navigation }) {
   // Restore the saved session once per account, then autosave a snapshot every 5 seconds.
   const restoredKey = useRef(null);
   const snapshot = useRef(null);
-  snapshot.current = { health, energy, stamina, battery, hydration, supply, inventory, playerPosition, survivalSeconds, xp, coins, foundLandmarks, selectedCharacterId, cameraSensitivity };
+  snapshot.current = { health, energy, stamina, battery, hydration, supply, inventory, playerPosition, survivalSeconds, xp, coins, foundLandmarks, selectedCharacterId, cameraSensitivity, environmentId, dronesDown, growth, disciplineId, coopCode, loadout, talkedNpcs: talkedNpcs.current, district, cosmetics };
   useEffect(() => {
     const key = user?.id || 'guest';
     if (!twin.ready || restoredKey.current === key) return;
@@ -419,7 +608,16 @@ export default function TwiniSurvivalScreen({ navigation }) {
     survivalClock.current = saved.survivalSeconds || 0; setSurvivalSeconds(saved.survivalSeconds || 0);
     setXp(saved.xp || 0); setCoins(saved.coins || 0); setFoundLandmarks(saved.foundLandmarks || []);
     if (saved.selectedCharacterId) setSelectedCharacterId(saved.selectedCharacterId);
+    if (saved.environmentId && environmentById(saved.environmentId).id === saved.environmentId) setEnvironmentId(saved.environmentId);
     if (saved.cameraSensitivity) setCameraSensitivity(saved.cameraSensitivity);
+    if (saved.growth) setGrowth(normalizeGrowthState(saved.growth));
+    if (saved.district) setDistrict(normalizeDistrictState(saved.district));
+    if (saved.cosmetics) setCosmetics(normalizeCosmetics(saved.cosmetics, saved.disciplineId || DEFAULT_DISCIPLINE, CHARACTER_IDS));
+    if (saved.disciplineId && DISCIPLINES.some((item) => item.id === saved.disciplineId)) setDisciplineId(saved.disciplineId);
+    if (saved.coopCode) setCoopCode(saved.coopCode);
+    if (saved.loadout) setLoadout(normalizeLoadout(saved.loadout));
+    if (Array.isArray(saved.talkedNpcs)) talkedNpcs.current = saved.talkedNpcs.filter((id) => npcById(id));
+    if (Number.isFinite(saved.dronesDown)) setDronesDown(saved.dronesDown);
   }, [twin.ready, twin.savedExtra, user?.id]);
   useEffect(() => {
     if (!twin.ready) return undefined;
@@ -427,15 +625,20 @@ export default function TwiniSurvivalScreen({ navigation }) {
     return () => clearInterval(interval);
   }, [twin.ready, twin.saveExtra]);
 
+  // Disiplin baru = set atribut baru; item emas yang sudah dibeli untuk disiplin itu tetap tersimpan.
+  useEffect(() => {
+    setCosmetics((previous) => (previous.disciplineId === disciplineId ? previous : cosmeticsForDisciplineChange(previous, disciplineId, CHARACTER_IDS)));
+  }, [disciplineId]);
+
   // Zone entry drives exploration missions and zone effects.
   useEffect(() => {
     if (panel !== 'game') return;
     const zone = zoneAt(playerPosition);
     if ((zone?.id || null) === (currentZone?.id || null)) return;
-    setCurrentZone(zone);
+    setCurrentZone(localizeZone(environmentId, zone));
     if (zone) {
       twin.emit({ type: 'explore_zone', id: zone.id });
-      setMessage(`Memasuki ${zone.name}${zone.interference ? ' · gangguan sinyal (simulasi)' : ''}${zone.hazard ? ' · hazard simulasi, cari shelter' : ''}`);
+      setMessage(`Memasuki ${localizeZone(environmentId, zone).name}${zone.interference ? ' · gangguan sinyal (simulasi)' : ''}${zone.hazard ? ' · hazard simulasi, cari shelter' : ''}`);
     }
   }, [playerPosition, panel]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -453,7 +656,7 @@ export default function TwiniSurvivalScreen({ navigation }) {
     const zone = zoneAt(playerPosition);
     const safe = !!safeZoneAt(playerPosition);
     const storm = !!twin.stormMission;
-    const next = tickSurvival({ health, hydration, connection: battery, supply }, { running, moving, zone, safe, storm });
+    const next = tickSurvival({ health, hydration, connection: battery, supply }, { running, moving, zone, safe, storm, healBonus: perks.healBonus || 0 });
     const healthDelta = next.health - health;
     setHydration(next.hydration);
     setBattery((value) => Math.max(0, Math.min(100, value + (next.connection - battery))));
@@ -469,11 +672,11 @@ export default function TwiniSurvivalScreen({ navigation }) {
   };
 
   const announceNearby = (position) => {
-    const landmark = LANDMARKS.find((item) => Math.hypot(item.position[0] - position[0], item.position[1] - position[1]) <= 2.3);
+    const landmark = localizeLandmark(environmentId, LANDMARKS.find((item) => Math.hypot(item.position[0] - position[0], item.position[1] - position[1]) <= 2.3));
     setNearbyLandmark(landmark || null);
     if (landmark && !foundLandmarks.includes(landmark.id)) {
       setFoundLandmarks((current) => current.includes(landmark.id) ? current : [...current, landmark.id]);
-      setXp((value) => value + 60);
+      gainXp(60);
       setCoins((value) => value + 10);
       setInventory((value) => ({ ...value, fragments: value.fragments + 1 }));
       setMessage(`Landmark ditemukan: ${landmark.name} · +60 XP · +10 koin`);
@@ -507,7 +710,7 @@ export default function TwiniSurvivalScreen({ navigation }) {
     announceNearby(next);
     if (!LANDMARKS.some((point) => Math.hypot(point.position[0] - next[0], point.position[1] - next[1]) <= 2.3) && Date.now() - lastMovementMessage.current > 1500) {
       lastMovementMessage.current = Date.now();
-      setMessage(running ? 'Berlari menyusuri taman Medan Merdeka…' : 'Menjelajah kawasan Monas…');
+      setMessage(running ? `Berlari menjelajah ${environment.name}…` : `Menjelajah ${environment.name}…`);
     }
     return true;
   };
@@ -545,7 +748,7 @@ export default function TwiniSurvivalScreen({ navigation }) {
   };
 
   const tiltCameraUp = () => setCameraTilt((v) => Math.min(1.2, v + 0.15));
-  const tiltCameraDown = () => setCameraTilt((v) => Math.max(-0.6, v - 0.15));
+  const tiltCameraDown = () => setCameraTilt((v) => Math.max(-1.8, v - 0.2)); // down to a low, foot-level view
   const resetCameraTilt = () => setCameraTilt(0);
 
   // Joystick → raw screen-space input (dx = right, dz = down). The 3D scene turns it into camera-relative
@@ -577,6 +780,7 @@ export default function TwiniSurvivalScreen({ navigation }) {
   };
   // Pull the live position from the scene into React state ~10x/s (HUD, mini map, missions, stamina).
   const movementSyncRef = useRef(null);
+  const lastPush = useRef({ key: '', pos: [0, 0], t: 0 });
   movementSyncRef.current = () => {
     const control = moveControl.current;
     control.running = running;
@@ -586,19 +790,42 @@ export default function TwiniSurvivalScreen({ navigation }) {
       lastMovementMessage.current = Date.now();
       setMessage(energy <= 0 ? '😮‍💨 Energi habis — Twini berjalan pelan. Pakai Battery / misi untuk memulihkan.' : '😮‍💨 Twini kelelahan — berjalan pelan, stamina pulih saat tidak berlari.');
     }
-    if (running && stamina <= 0) setRunning(false);
+    if (running && stamina <= 0 && !control.vehicle) setRunning(false);
+    // Vehicle proximity (contextual NAIK button) and ride state (environment switch drops the vehicle).
+    if (riding && !control.vehicle) setRiding(null);
+    if (!control.vehicle) {
+      const hit = findNearVehicle();
+      const id = hit ? hit.id : null;
+      if ((nearVehicle?.id || null) !== id) setNearVehicle(hit ? { id: hit.id, type: hit.type, name: hit.name } : null);
+    } else if (nearVehicle) setNearVehicle(null);
     const travelled = control.distance;
     if (travelled < 0.004) return;
+    // Re-rendering the whole game screen is expensive on phones, so the live position is only pushed into
+    // React state when the gameplay-relevant situation changes (nearest object, zone, landmark, Energy Core),
+    // after a longer walk, or at most every 1.5 s. Everything that must follow Twini every frame (avatar,
+    // camera, shadow, guide arrows, mini map) reads the live controller directly.
+    const here = control.pos;
+    const near = nearestInteractable(here, twin.objectState, Date.now(), interactRadius);
+    const zone = zoneAt(here);
+    const landmark = LANDMARKS.find((item) => Math.hypot(item.position[0] - here[0], item.position[1] - here[1]) <= 2.3);
+    const core = PICKUPS.findIndex(([x, z], index) => !foundPickups.includes(index) && Math.hypot(x - here[0], z - here[1]) <= 2.25);
+    const key = `${near?.object.id || ''}|${near?.cooling ? 1 : 0}|${zone?.id || ''}|${landmark?.id || ''}|${core}`;
+    const last = lastPush.current;
+    const farWalk = Math.hypot(here[0] - last.pos[0], here[1] - last.pos[1]) > 2.5;
+    if (key === last.key && !farWalk && Date.now() - last.t < 1500) return;
     control.distance = 0;
-    const next = [control.pos[0], control.pos[1]];
+    const next = [here[0], here[1]];
+    lastPush.current = { key, pos: next, t: Date.now() };
     syncedPos.current.add(next);
     setPlayerPosition(next);
-    if (running) setStamina((value) => Math.max(0, value - travelled * (3.6 / RUN_SPEED)));
-    setEnergy((value) => Math.max(0, value - travelled * (running ? 1.2 / RUN_SPEED : 0.35 / WALK_SPEED)));
+    if (!control.vehicle) {
+      if (running) setStamina((value) => Math.max(0, value - travelled * (3.6 / RUN_SPEED)));
+      setEnergy((value) => Math.max(0, value - travelled * (running ? 1.2 / RUN_SPEED : 0.35 / WALK_SPEED)));
+    }
     announceNearby(next);
     if (!LANDMARKS.some((point) => Math.hypot(point.position[0] - next[0], point.position[1] - next[1]) <= 2.3) && Date.now() - lastMovementMessage.current > 1500) {
       lastMovementMessage.current = Date.now();
-      setMessage(running ? 'Berlari menyusuri taman Medan Merdeka…' : 'Menjelajah kawasan Monas…');
+      setMessage(control.vehicle ? `${VEHICLE_TYPES[control.vehicle.type].emoji} Berkendara di ${environment.name}…` : running ? `Berlari menjelajah ${environment.name}…` : `Menjelajah ${environment.name}…`);
     }
   };
   joystickMoveHandler.current = updateJoystick;
@@ -669,9 +896,11 @@ export default function TwiniSurvivalScreen({ navigation }) {
       const el = event.target;
       return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
     };
+    const actionKeys = { f: 'fire', e: 'ride', t: 'teleport', ' ': 'jump' };
     const handleKeyDown = (event) => {
       if (isTyping(event)) return;
       const key = event.key.toLowerCase();
+      if (actionKeys[key] && !event.repeat) { event.preventDefault(); hudActions.current[actionKeys[key]]?.(); return; }
       if (!keyDirections[key]) return;
       event.preventDefault();
       if (!pressedKeys.current.has(key)) {
@@ -702,8 +931,88 @@ export default function TwiniSurvivalScreen({ navigation }) {
     };
   }, [panel, gameComplete, compact, landscape]);
 
+  // ---------- warga (NPC) ----------
+  const talkToNpc = (npc) => {
+    if (!npc) return;
+    stopMovement();
+    const first = !talkedNpcs.current.includes(npc.id);
+    if (first) {
+      talkedNpcs.current = [...talkedNpcs.current, npc.id];
+      setCoins((value) => value + npc.reward.coins);
+      gainXp(npc.reward.xp);
+      twin.emit({ type: 'talk_npc', id: npc.id });
+      setMessage(`💬 ${npc.name}: “${npc.greeting}” · +${npc.reward.coins} koin · +${npc.reward.xp} XP`);
+    } else {
+      setMessage(`💬 ${npc.name}: “${npc.greeting}”`);
+    }
+    setNpcTalk({ id: npc.id, line: 0, claimed: !first });
+  };
+  const nextNpcLine = () => setNpcTalk((state) => {
+    if (!state) return state;
+    const npc = npcById(state.id);
+    const total = 1 + (npc?.lines?.length || 0);
+    return { ...state, line: Math.min(state.line + 1, total - 1) };
+  });
+
+  // ---------- toko & upgrade ----------
+  const openShop = (tab = 'weapons') => {
+    stopMovement();
+    setShopTab(tab);
+    setShopNotice('');
+    setPanel('shop');
+  };
+  const buyWeaponItem = (id) => {
+    const result = buyWeapon(loadout, coins, id);
+    if (!result.ok) { setShopNotice(result.error); return; }
+    setLoadout(result.loadout);
+    setCoins(result.coins);
+    setShopNotice(`✅ ${result.loadout.equippedWeapon.toUpperCase()} dibeli & langsung dipakai (−${result.cost} koin).`);
+  };
+  const equipWeaponItem = (id) => {
+    const result = equipWeapon(loadout, id);
+    if (!result.ok) { setShopNotice(result.error); return; }
+    setLoadout(result.loadout);
+    setShopNotice(`✅ Senjata diganti ke ${weaponStatsFor(result.loadout).name}.`);
+  };
+  const buyAccessoryItem = (id) => {
+    const result = buyAccessory(loadout, coins, id);
+    if (!result.ok) { setShopNotice(result.error); return; }
+    setLoadout(result.loadout);
+    setCoins(result.coins);
+    setShopNotice(`✅ Aksesori dipasang (−${result.cost} koin).`);
+  };
+  const toggleAccessoryItem = (id) => {
+    const wasActive = loadout.accessories.includes(id);
+    setLoadout((current) => toggleAccessory(current, id));
+    setShopNotice(wasActive ? 'Aksesori dilepas — tetap dimiliki, bisa dipasang lagi gratis.' : 'Aksesori dipasang kembali.');
+  };
+  const buyBuildingItem = (id) => {
+    const result = buyBuildingUpgrade(loadout, coins, id);
+    if (!result.ok) { setShopNotice(result.error); return; }
+    setLoadout(result.loadout);
+    setCoins(result.coins);
+    setShopNotice(`✅ Upgrade aset kota aktif (−${result.cost} koin).`);
+  };
+  const buyVehicleItem = (id) => {
+    const result = buyVehicleUpgrade(loadout, coins, id);
+    if (!result.ok) { setShopNotice(result.error); return; }
+    setLoadout(result.loadout);
+    setCoins(result.coins);
+    setShopNotice(`✅ Upgrade kendaraan aktif (−${result.cost} koin).`);
+  };
+  // Beli aset kota secara langsung: tukar koin menjadi Poin Pertumbuhan Kota.
+  const buyGrowthPack = (points, cost) => {
+    if (coins < cost) { setShopNotice(`Koin kurang ${cost - coins}.`); return; }
+    setCoins((value) => value - cost);
+    setGrowth((state) => addGrowthPoints(state, points));
+    setShopNotice(`✅ +${points} Poin Pertumbuhan Kota (−${cost} koin). Buka Wabah & Pertumbuhan Kota untuk membangun.`);
+  };
+
   const interact = () => {
-    const pickupIndex = PICKUPS.findIndex(([x, z], index) => !foundPickups.includes(index) && Math.hypot(x - playerPosition[0], z - playerPosition[1]) <= 2.25);
+    if (nearNpc) { talkToNpc(nearNpc); return; }
+    if (nearShop) { openShop(nearShop.panel); return; }
+    const here = [moveControl.current.pos[0], moveControl.current.pos[1]];
+    const pickupIndex = PICKUPS.findIndex(([x, z], index) => !foundPickups.includes(index) && Math.hypot(x - here[0], z - here[1]) <= 2.25);
     if (pickupIndex >= 0) {
       setFoundPickups((current) => [...current, pickupIndex]);
       pickupTimes.current[pickupIndex] = Date.now();
@@ -711,15 +1020,19 @@ export default function TwiniSurvivalScreen({ navigation }) {
       setEnergy((value) => Math.min(100, value + 8));
       setBattery((value) => Math.min(100, value + 5));
       setCoins((value) => value + 15);
-      setXp((value) => value + 40);
+      gainXp(40);
       twin.emit({ type: 'collect_core' });
       setMessage('Energy Core didapatkan · energi +8 · +40 XP');
       return;
     }
-    if (nearTarget) {
-      handleObject(nearTarget);
+    const target = interaction ? null : localizeTarget(environmentId, nearestInteractable(here, twin.objectState, Date.now(), interactRadius));
+    if (target) {
+      handleObject(target);
       return;
     }
+    // INTERACT also boards a vehicle standing next to Twini.
+    const parked = moveControl.current.vehicle ? null : findNearVehicle();
+    if (parked) { board(parked); return; }
     setMessage(nearbyLandmark ? `Kamu berada di ${nearbyLandmark.name}. Terus jelajahi dan interaksi dengan objek terdekat.` : 'Belum ada objek di dekatmu. Bergerak ke marker pada mini map.');
   };
 
@@ -730,7 +1043,7 @@ export default function TwiniSurvivalScreen({ navigation }) {
         twin.updateObject(object.id, { done: true });
         twin.emit({ type: 'activate_sensor', id: object.id });
         setBattery((value) => Math.min(100, value + 10));
-        setXp((value) => value + 40);
+        gainXp(40);
         setMessage(`${object.name} aktif · data IoT tersambung (simulasi) · +40 XP`);
         return;
       case 'identify':
@@ -740,7 +1053,7 @@ export default function TwiniSurvivalScreen({ navigation }) {
       case 'rescue':
         twin.updateObject(object.id, { done: true });
         twin.emit({ type: 'rescue_npc', id: object.id });
-        setXp((value) => value + 60);
+        gainXp(60);
         setMessage(`${object.name}: “${object.line}”`);
         return;
       case 'challenge':
@@ -782,7 +1095,7 @@ export default function TwiniSurvivalScreen({ navigation }) {
     }
   };
 
-  const interactionObject = interaction ? WORLD_OBJECTS.find((object) => object.id === interaction.objectId) : null;
+  const interactionObject = interaction ? localizeObject(environmentId, WORLD_OBJECTS.find((object) => object.id === interaction.objectId)) : null;
   const scanDone = useRef(null);
   scanDone.current = () => {
     if (!interactionObject) return;
@@ -791,7 +1104,7 @@ export default function TwiniSurvivalScreen({ navigation }) {
     if (type.action === 'identify') {
       twin.updateObject(id, { done: true });
       twin.emit({ type: 'identify_pollution', id });
-      setXp((value) => value + 50);
+      gainXp(50);
       setMessage('Titik polusi teridentifikasi & dilaporkan ke Digital Twin (simulasi) · +50 XP');
       setInteraction(null);
       return;
@@ -815,20 +1128,20 @@ export default function TwiniSurvivalScreen({ navigation }) {
       twin.updateObject(id, { synced: true, lastSync: Date.now() });
       twin.emit({ type: 'sync_object', id });
       setBattery((value) => Math.max(0, value - 3));
-      setXp((value) => value + 30);
+      gainXp(30);
       setMessage(`${name} tersinkron dengan Digital Twin pusat · +30 XP`);
     } else if (type.action === 'repair') {
       setSupply((value) => Math.max(0, value - type.supplyCost));
       twin.updateObject(id, { repaired: true });
       twin.emit({ type: 'repair_drainage', id });
-      setXp((value) => value + 70);
+      gainXp(70);
       setMessage(`${name} diperbaiki · aliran air normal (simulasi) · +70 XP`);
     } else if (type.action === 'restore_station') {
       setSupply((value) => Math.max(0, value - type.supplyCost));
       twin.updateObject(id, { restored: true, lastCharge: Date.now() });
       twin.emit({ type: 'restore_station', id });
       setEnergy((value) => Math.min(100, value + 30));
-      setXp((value) => value + 70);
+      gainXp(70);
       setMessage(`${name} kembali menyala · energi +30 · +70 XP`);
     } else if (type.action === 'restore') {
       const finalMission = twin.missions.find((mission) => mission.id === 'm12');
@@ -849,7 +1162,7 @@ export default function TwiniSurvivalScreen({ navigation }) {
     if (correct) {
       twin.updateObject(interactionObject.id, { done: true });
       twin.emit({ type: 'infra_challenge', id: interactionObject.id });
-      setXp((value) => value + 80);
+      gainXp(80);
     } else {
       setEnergy((value) => Math.max(0, value - 5));
       twin.updateObject(interactionObject.id, { lastUsed: Date.now() });
@@ -864,6 +1177,7 @@ export default function TwiniSurvivalScreen({ navigation }) {
   })();
 
   const jump = () => {
+    if (moveControl.current.vehicle) { setMessage('Turun dulu dari kendaraan untuk melompat (tombol TURUN / E).'); return; }
     setJumping(true);
     setStamina((value) => Math.max(0, value - 6));
     clearTimeout(jumpTimer.current);
@@ -873,6 +1187,7 @@ export default function TwiniSurvivalScreen({ navigation }) {
   // DASH / BACK: a short velocity burst integrated by the scene (smooth, frame-synced).
   const moveBurst = (direction, distance = 1) => {
     const control = moveControl.current;
+    if (control.vehicle) { setMessage('🚀 Saat berkendara gunakan RUN sebagai TURBO.'); return; }
     if (stamina < 2) { setMessage('😮‍💨 Stamina belum cukup untuk DASH — tunggu sebentar.'); return; }
     const duration = direction > 0 ? 0.28 : 0.22;
     const length = direction > 0 ? 1.65 * distance : 1.2 * distance; // DASH ≈ 2.2 units, BACK ≈ 1.1 units
@@ -925,7 +1240,7 @@ export default function TwiniSurvivalScreen({ navigation }) {
     };
     trackedTargets.forEach((object) => consider(object.position, object.name));
     if (!best) PICKUPS.forEach((position, index) => { if (!foundPickups.includes(index)) consider(position, 'Energy Core'); });
-    if (!best) LANDMARKS.forEach((landmark) => consider(landmark.position, landmark.name));
+    if (!best) LANDMARKS.forEach((landmark) => consider(landmark.position, localizeLandmark(environmentId, landmark).name));
     if (!best) { setMessage('Tidak ada tujuan baru di sekitar Twini.'); return; }
     setWaypoint(best.position, best.name);
   };
@@ -937,11 +1252,320 @@ export default function TwiniSurvivalScreen({ navigation }) {
     setMessage(low ? 'Item yang dibutuhkan habis — kumpulkan supply dari objek & misi.' : 'Status Twini masih prima, item disimpan.');
   };
 
+  // ---------- vehicles ----------
+  const isWalkable = (x, z) => {
+    const world = moveControl.current.world;
+    return !(Math.abs(x) < MONAS_TOWER_HALF && Math.abs(z) < MONAS_TOWER_HALF) && (!world || world.walkable(x, z));
+  };
+  function findNearVehicle() {
+    const c = moveControl.current;
+    let best = null;
+    let bestD = Infinity;
+    (c.vehicles || []).forEach((v) => {
+      const d = Math.hypot(v.pos[0] - c.pos[0], v.pos[1] - c.pos[1]);
+      if (d < VEHICLE_TYPES[v.type].reach + 0.6 && d < bestD) { best = v; bestD = d; }
+    });
+    return best;
+  }
+  const board = (v) => {
+    const c = moveControl.current;
+    c.vehicle = v;
+    c.seat = seatOf(v);
+    c.dashT = 0;
+    setPatrolMode(false);
+    setRiding({ id: v.id, type: v.type, name: v.name });
+    setNearVehicle(null);
+    const T = VEHICLE_TYPES[v.type];
+    setMessage(`${T.emoji} Naik ${T.label} · ▲ gas · ▼ rem/mundur · ◀▶ belok · RUN = turbo · FIRE tetap bisa`);
+  };
+  const exitVehicle = () => {
+    const c = moveControl.current;
+    const v = c.vehicle;
+    if (!v) return;
+    if (Math.abs(v.speed) > 3.5) { setMessage('Pelankan kendaraan dulu sebelum turun.'); return; }
+    const T = VEHICLE_TYPES[v.type];
+    let spot = null;
+    for (const local of [[-T.exit, 0, 0], [T.exit, 0, 0], [0, 0, -2.8], [0, 0, 2.8]]) {
+      const [x, , z] = vehicleLocalToWorld(v, local);
+      if (isWalkable(x, z)) { spot = [x, z]; break; }
+    }
+    if (!spot && v.type === 'boat') {
+      // Moor at the nearest pier plank or beach within reach.
+      const px = Math.max(PIER.x0 + 0.4, Math.min(PIER.x1 - 0.4, v.pos[0]));
+      const pz = Math.max(PIER.z0 + 0.4, Math.min(PIER.z1 - 0.4, v.pos[1]));
+      const r = Math.hypot(v.pos[0], v.pos[1]) || 1;
+      if (Math.hypot(px - v.pos[0], pz - v.pos[1]) < 4.2) spot = [px, pz];
+      else if (r < WADE_R + 6) spot = [(v.pos[0] / r) * (WADE_R - 0.8), (v.pos[1] / r) * (WADE_R - 0.8)];
+    }
+    if (!spot) { setMessage('🚤 Merapat ke pantai atau dermaga dulu untuk turun.'); return; }
+    v.speed *= 0.2;
+    c.vehicle = null;
+    c.seat = null;
+    c.pos[0] = spot[0]; c.pos[1] = spot[1];
+    c.vel[0] = 0; c.vel[1] = 0;
+    c.facing = { dx: Math.sin(v.yaw), dz: Math.cos(v.yaw) };
+    const next = [spot[0], spot[1]];
+    syncedPos.current.add(next);
+    setPlayerPosition(next);
+    setRiding(null);
+    setMessage(`Turun dari ${T.label}.`);
+  };
+  const toggleRide = () => {
+    if (moveControl.current.vehicle) { exitVehicle(); return; }
+    const v = findNearVehicle();
+    if (v) { board(v); return; }
+    // Nothing in reach: point the yellow guide arrows at the closest vehicle.
+    const c = moveControl.current;
+    let best = null;
+    (c.vehicles || []).forEach((item) => { const d = Math.hypot(item.pos[0] - c.pos[0], item.pos[1] - c.pos[1]); if (!best || d < best.d) best = { item, d }; });
+    if (!best) { setMessage('Belum ada kendaraan di environment ini.'); return; }
+    setWaypoint([best.item.pos[0], best.item.pos[1]], best.item.name, true);
+    setMessage(`${VEHICLE_TYPES[best.item.type].emoji} ${best.item.name} · ${Math.round(best.d)} m — ikuti panah kuning, lalu tekan NAIK (atau TELE untuk langsung naik)`);
+  };
+
+  // ---------- launcher ----------
+  const fire = () => {
+    const now = Date.now();
+    const cooldownMs = shotIntervalMs(weapon, perks.fireCooldown || 1);
+    if (now - lastShot.current < cooldownMs) return;
+    if (ammo <= 0) { setMessage(`🔋 Sel ${weapon.name} habis — terisi otomatis +1 tiap detik.`); return; }
+    lastShot.current = now;
+    moveControl.current.fireSeq = (moveControl.current.fireSeq || 0) + 1;
+    setAmmo((value) => Math.max(0, value - 1));
+  };
+  moveControl.current.onCombat = (event) => {
+    if (event.type !== 'hit') return;
+    setDronesDown((value) => value + 1);
+    gainXp(30);
+    setCoins((value) => value + 8);
+    setMessage(`🎯 Drone polusi${event.sea ? ' laut' : ''} dihancurkan! +30 XP · +8 koin`);
+  };
+
+  // ---------- wabah digital & pertumbuhan kota ----------
+  // Setiap wabah yang hancur memberi XP, koin, energi, dan Poin Pertumbuhan Kota untuk membangun aset.
+  moveControl.current.onWabah = (event) => {
+    const def = wabahType(event?.kind);
+    if (!def) return;
+    if (event.type === 'hit') {
+      setMessage(`💥 ${def.name} terkena tembakan! ${def.hp} HP — tembak lagi untuk menetralkan.`);
+      return;
+    }
+    gainXp(def.rewardXp);
+    setCoins((value) => value + def.rewardCoins);
+    setEnergy((value) => Math.min(100, value + def.rewardEnergy));
+    setGrowth((state) => recordWabahDown(state, event.kind, def.growth + (perks.growthFlat || 0)));
+    twin.emit({ type: 'purge_wabah', id: event.id, target: event.kind });
+    setMessage(`✅ ${def.name} dinetralkan! +${def.rewardXp} XP · +${def.rewardCoins} koin · +${def.rewardEnergy} energi · +${def.growth} Poin Pertumbuhan Kota`);
+  };
+
+  // "Cari & Tembak Wabah": putar Twini ke wabah terdekat; jarak jauh memakai waypoint kuning.
+  const aimAndFireWabah = () => {
+    const c = moveControl.current;
+    const targets = (c?.wabah || []).filter((entry) => entry.alive);
+    if (!c || !targets.length) {
+      setMessage('Wabah sedang tidak aktif. Jelajahi zona untuk menemukannya.');
+      setPanel('game');
+      return;
+    }
+    let best = null;
+    targets.forEach((entry) => {
+      const distance = Math.hypot(entry.pos.x - c.pos[0], entry.pos.z - c.pos[1]);
+      if (!best || distance < best.distance) best = { entry, distance };
+    });
+    const def = wabahType(best.entry.kind);
+    const dx = best.entry.pos.x - c.pos[0];
+    const dz = best.entry.pos.z - c.pos[1];
+    const length = Math.hypot(dx, dz) || 1;
+    c.facing = { dx: dx / length, dz: dz / length };
+    if (best.distance > 26) {
+      setPanel('game');
+      setWaypoint([best.entry.pos.x, best.entry.pos.z], `${def.name} (wabah)`);
+      setMessage(`🔍 ${def.name} terdeteksi ${Math.round(best.distance)} m dari sini — ikuti panah kuning, lalu tekan FIRE.`);
+      return;
+    }
+    if (panel === 'game') {
+      setTimeout(() => fire(), 160);
+    } else {
+      wabahFireAt.current = Date.now();
+      setPanel('game');
+    }
+    setMessage(`🎯 Mengunci ${def.name} · ${Math.round(best.distance)} m — plasma diluncurkan!`);
+  };
+
+  // Membangun aset kota pada petak bidang tanah (dipanggil dari CityGrowthPanel).
+  const buildCityAsset = (plotId, buildingId) => {
+    const result = buildOnPlot(growth, plotId, buildingId, Date.now(), perks);
+    if (!result.ok) { setMessage(result.error); return; }
+    setGrowth(result.state);
+    twin.emit({ type: 'build_city_asset', id: plotId, target: buildingId });
+    if (restoredKey.current) twin.saveExtra({ ...snapshot.current, growth: result.state });
+    setMessage(`🏗️ ${result.building.name} dibangun di ${result.plot.name} (−${result.cost} poin)! Indeks pertumbuhan kota meningkat.`);
+  };
+
+  // ── Wilayah pengembangan: beli petak darat/laut, bangun kawasan, klaim pendapatan ─────────────
+  const buyDistrictPlot = (plotId) => {
+    const result = buyPlot(district, coins, plotId, Date.now(), { cleared: growth.cleared, modifiers: perks });
+    if (!result.ok) { setDistrictNotice(result.error); return; }
+    setDistrict(result.state);
+    setCoins(result.coins);
+    setDistrictNotice(`✅ ${result.plot.name} dibeli (−${result.price} koin). Pilih bangunan untuk mulai membangun.`);
+    setMessage(`🗺️ ${result.plot.name} kini milikmu (−${result.price} koin).`);
+    twin.emit({ type: 'buy_plot', id: plotId });
+    if (restoredKey.current) twin.saveExtra({ ...snapshot.current, district: result.state, coins: result.coins });
+  };
+
+  const buildDistrictBuilding = (plotId, buildingId) => {
+    const result = buildOnDistrictPlot(district, plotId, buildingId, growth.points, Date.now(), perks);
+    if (!result.ok) { setDistrictNotice(result.error); return; }
+    setDistrict(result.state);
+    setGrowth((state) => ({ ...state, points: result.points }));
+    setDistrictNotice(`✅ ${result.building.name} berdiri di ${result.plot.name} (−${result.cost} poin). Nilai wilayah +${result.building.value}, pendapatan +${result.building.coinsPerMin} koin/menit.`);
+    setMessage(`🏙️ ${result.building.name} dibangun di ${result.plot.name}!`);
+    // Event yang sama dengan aset kota supaya misi "kota hijau" ikut menghitung pembangunan wilayah.
+    twin.emit({ type: 'build_city_asset', id: plotId, target: buildingId });
+    if (restoredKey.current) twin.saveExtra({ ...snapshot.current, district: result.state });
+  };
+
+  const collectDistrict = () => {
+    const result = collectDistrictIncome(district, Date.now());
+    if (!result.ok) { setDistrictNotice(result.error); return; }
+    setDistrict(result.state);
+    setCoins((value) => value + result.coins);
+    setGrowth((state) => addGrowthPoints(state, result.growth));
+    setDistrictNotice(`💰 Pendapatan wilayah diklaim: +${result.coins} koin dan +${result.growth} poin pertumbuhan.`);
+    setMessage(`💰 +${result.coins} koin · +${result.growth} poin dari wilayah pengembangan.`);
+    if (restoredKey.current) twin.saveExtra({ ...snapshot.current, district: result.state });
+  };
+
+  // ── Profil aksesori per karakter: topi, pakaian, sepatu, aksesori/lencana ────────────────────
+  const buyCharacterCosmetic = (id) => {
+    const result = buyCosmetic(cosmetics, id, coins, selectedCharacterId);
+    if (!result.ok) { setCosmeticsNotice(result.error); return; }
+    setCosmetics(result.state);
+    setCoins(result.coins);
+    setCosmeticsNotice(`✅ ${result.item.name} dibeli & langsung dipakai oleh ${selectedCharacter?.name || 'karakter ini'} (−${result.price} koin).`);
+    if (restoredKey.current) twin.saveExtra({ ...snapshot.current, cosmetics: result.state, coins: result.coins });
+  };
+
+  const equipCharacterCosmetic = (id) => {
+    const result = equipCosmetic(cosmetics, id, selectedCharacterId);
+    if (!result.ok) { setCosmeticsNotice(result.error); return; }
+    setCosmetics(result.state);
+    setCosmeticsNotice(`👕 ${result.item.name} dipakai ${selectedCharacter?.name || 'karakter ini'}.`);
+    if (restoredKey.current) twin.saveExtra({ ...snapshot.current, cosmetics: result.state });
+  };
+
+  const unequipCharacterCosmetic = (slot) => {
+    const result = unequipCosmeticSlot(cosmetics, slot, selectedCharacterId);
+    if (!result.ok) { setCosmeticsNotice(result.error); return; }
+    setCosmetics(result.state);
+    setCosmeticsNotice('Atribut dilepas dari slot tersebut.');
+    if (restoredKey.current) twin.saveExtra({ ...snapshot.current, cosmetics: result.state });
+  };
+
+  const toggleCharacterCosmeticSlot = (slot) => {
+    const result = toggleCosmeticSlot(cosmetics, slot, selectedCharacterId);
+    if (!result.ok) { setCosmeticsNotice(result.error); return; }
+    setCosmetics(result.state);
+    setCosmeticsNotice(`${SLOT_META[slot]?.label || slot}: ${result.enabled ? 'dipakai' : 'disembunyikan'} untuk ${selectedCharacter?.name || 'karakter ini'}.`);
+    if (restoredKey.current) twin.saveExtra({ ...snapshot.current, cosmetics: result.state });
+  };
+
+  const applyCosmeticsToAll = () => {
+    const next = applyProfileToAll(cosmetics, selectedCharacterId, CHARACTER_IDS);
+    setCosmetics(next);
+    setCosmeticsNotice('✅ Profil atribut disalin ke semua karakter Twini.');
+    if (restoredKey.current) twin.saveExtra({ ...snapshot.current, cosmetics: next });
+  };
+
+  // Fire queued from the wabah panel once the game scene is mounted. Waiting for `wabah` (published by
+  // WabahLayer) guarantees CombatLayer already re-read the fire sequence, so the shot is not swallowed.
+  useEffect(() => {
+    if (panel !== 'game' || !wabahFireAt.current) return undefined;
+    let tries = 0;
+    const id = setInterval(() => {
+      tries += 1;
+      if (moveControl.current?.wabah) {
+        wabahFireAt.current = 0;
+        clearInterval(id);
+        hudActions.current.fire?.();
+      } else if (tries > 40) {
+        wabahFireAt.current = 0;
+        clearInterval(id);
+      }
+    }, 250);
+    return () => clearInterval(id);
+  }, [panel]);
+
+  // ---------- teleport ----------
+  const teleportTo = (target, name, vehicleId = null) => {
+    const now = Date.now();
+    if (now - lastTeleport.current < 1500) return;
+    if (energy < TELEPORT_COST) { setMessage(`✨ Energi kurang untuk teleport (butuh ${TELEPORT_COST}).`); return; }
+    const c = moveControl.current;
+    const world = c.world;
+    const from = [c.pos[0], c.vehicle ? c.vehicle.y : (c.groundY ?? 0), c.pos[1]];
+    let dest;
+    if (c.vehicle) { c.vehicle.speed = 0; c.vehicle.vel = [0, 0]; c.vehicle = null; c.seat = null; }
+    const vehicle = vehicleId ? (c.vehicles || []).find((v) => v.id === vehicleId) : null;
+    if (vehicle) {
+      dest = [vehicle.pos[0], vehicle.pos[1]];
+    } else {
+      // Land next to the target (sensor posts / landmarks are solid), on walkable ground, facing it.
+      const toward = Math.atan2(c.pos[0] - target[0], c.pos[1] - target[1]);
+      for (let i = 0; i < 16 && !dest; i += 1) {
+        const a = toward + (i % 2 ? 1 : -1) * Math.ceil(i / 2) * (Math.PI / 8);
+        const r = i < 8 ? 1.6 : 2.6;
+        const x = target[0] + Math.sin(a) * r;
+        const z = target[1] + Math.cos(a) * r;
+        if (isWalkable(x, z)) dest = [x, z];
+      }
+      if (!dest) dest = [0, 8];
+      const fx = target[0] - dest[0];
+      const fz = target[1] - dest[1];
+      const fl = Math.hypot(fx, fz) || 1;
+      c.facing = { dx: fx / fl, dz: fz / fl };
+    }
+    lastTeleport.current = now;
+    c.pos[0] = dest[0]; c.pos[1] = dest[1];
+    c.vel[0] = 0; c.vel[1] = 0; c.dashT = 0;
+    c.input = { dx: 0, dz: 0 };
+    const toY = vehicle ? vehicle.y : (world ? world.groundAt(dest[0], dest[1]) : 0);
+    c.teleport = { seq: (c.teleport?.seq || 0) + 1, from, to: [dest[0], toY, dest[1]] };
+    const next = [dest[0], dest[1]];
+    syncedPos.current.add(next);
+    setPlayerPosition(next);
+    setRiding(null);
+    setEnergy((value) => Math.max(0, value - TELEPORT_COST));
+    setShowTeleport(false);
+    setGuide(null);
+    announceNearby(next);
+    if (vehicle) board(vehicle);
+    else setMessage(`✨ Teleport ke ${name} · energi −${TELEPORT_COST}`);
+  };
+  const openTeleport = () => { stopMovement(); setShowTeleport(true); };
+
   const startGame = () => {
+    // Setiap permainan baru selalu dimulai dari start point environment (gerbang selatan).
+    const spawn = startPointFor(environmentId);
+    const controller = moveControl.current;
+    if (controller) {
+      if (controller.vehicle) { controller.vehicle.speed = 0; controller.vehicle.vel = [0, 0]; controller.vehicle = null; controller.seat = null; }
+      controller.pos[0] = spawn.position[0];
+      controller.pos[1] = spawn.position[1];
+      controller.vel[0] = 0; controller.vel[1] = 0;
+      controller.input = { dx: 0, dz: 0 };
+      controller.facing = { dx: 0, dz: -1 };
+    }
+    const next = [spawn.position[0], spawn.position[1]];
+    syncedPos.current.add(next);
+    setPlayerPosition(next);
+    setRiding(null);
+    setAmmo(ammoCap);
     setShowInstructions(true);
     setShowNavigationBar(false);
     navigation?.setBottomNavigationVisible?.(false);
-    setMessage('Twini tiba di kawasan Monas. Temukan landmark dan pulihkan sensor kota!');
+    setMessage(`🟢 Start point: ${spawn.label} — ${spawn.note} ${weapon.name} siap dengan ${weapon.damage} damage. 🏪 Distrik toko ada di utara-timur (gapura biru) atau ketuk chip koin di HUD.`);
     setPanel('game');
   };
   const backToMenu = () => {
@@ -953,8 +1577,8 @@ export default function TwiniSurvivalScreen({ navigation }) {
     navigation?.setBottomNavigationVisible?.(true);
     setPanel('home');
   };
-  const MenuButton = ({ icon, title, detail, onPress, accent = '#83bdff' }) => <TouchableOpacity onPress={onPress} style={styles.menuCard} accessibilityRole="button">
-    <View style={[styles.menuIcon, { backgroundColor: `${accent}20` }]}><FontAwesomeIcon icon={icon} size={15} color={accent} /></View>
+  const MenuButton = ({ icon, title, detail, onPress, accent = '#83bdff' }) => <TouchableOpacity onPress={onPress} activeOpacity={0.8} style={[styles.menuCard, { borderColor: `${accent}aa`, borderLeftColor: accent, backgroundColor: `${accent}2e` }]} accessibilityRole="button">
+    <View style={[styles.menuIcon, { backgroundColor: `${accent}33` }]}><FontAwesomeIcon icon={icon} size={15} color={accent} /></View>
     <View style={styles.menuCardCopy}><Text style={styles.menuCardTitle}>{title}</Text><Text style={styles.menuCardDetail}>{detail}</Text></View>
     <FontAwesomeIcon icon={faChevronRight} size={12} color="#71839c" />
   </TouchableOpacity>;
@@ -963,8 +1587,9 @@ export default function TwiniSurvivalScreen({ navigation }) {
   hudActions.current = {
     emote, focus: focusCamera, guide: guideToTarget, item: quickItem, jump, interact, patrol: togglePatrol,
     back: () => moveBurst(-1, 0.9), dash: () => moveBurst(1, 1.35), run: () => setRunning((value) => !value),
+    fire, ride: toggleRide, teleport: openTeleport,
   };
-  const press = useMemo(() => Object.fromEntries(['emote', 'focus', 'guide', 'item', 'jump', 'interact', 'patrol', 'back', 'dash', 'run']
+  const press = useMemo(() => Object.fromEntries(['emote', 'focus', 'guide', 'item', 'jump', 'interact', 'patrol', 'back', 'dash', 'run', 'fire', 'ride', 'teleport']
     .map((key) => [key, () => hudActions.current[key]()])), []);
 
   const mapHeader = <View style={styles.mapModalHeader}>
@@ -979,14 +1604,14 @@ export default function TwiniSurvivalScreen({ navigation }) {
     <StatusBar hidden />
     <View style={[styles.worldFrame, styles.worldFrameGame, Platform.OS === 'web' && styles.worldFrameGameWeb]}>
       <WorldSceneBoundary key={sceneAttempt} onRetry={() => setSceneAttempt((attempt) => attempt + 1)}><React.Suspense fallback={<View style={styles.worldFallback}><Text style={styles.fallbackText}>Menyiapkan Monas Digital Twin…</Text></View>}>
-        <SurvivalWorldScene playerPosition={playerPosition} movementDirection={facingDirection.current} moving={moving} running={running} jumping={jumping} foundPickups={foundPickups} character={selectedCharacter} cameraZoom={cameraZoom} cameraTilt={cameraTilt} cameraForwardRef={cameraForward} worldObjects={visibleObjects} objectState={twin.objectState} highlightId={nearTarget?.object.id} zones={ZONES} lighting={lighting} cameraSensitivity={cameraSensitivity} emoteSignal={emoteSignal} focusSignal={focusSignal} guide={guide} controlRef={moveControl} />
+        <SurvivalWorldScene playerPosition={playerPosition} movementDirection={facingDirection.current} moving={moving} running={running} jumping={jumping} foundPickups={foundPickups} character={selectedCharacter} cameraZoom={cameraZoom} cameraTilt={cameraTilt} cameraForwardRef={cameraForward} worldObjects={visibleObjects} objectState={twin.objectState} highlightId={nearTarget?.object.id} zones={ZONES} lighting={lighting} cameraSensitivity={cameraSensitivity} emoteSignal={emoteSignal} focusSignal={focusSignal} guide={guide} controlRef={moveControl} environment={environmentId} growth={growth} unlockBonus={perks.unlockBonus || 0} weapon={weapon} vehicleStats={vehiclePerf} district={district} cosmetics={profileFor(cosmetics, selectedCharacterId)} characterId={selectedCharacterId} />
       </React.Suspense></WorldSceneBoundary>
       {weather === 'storm' ? <View pointerEvents="none" style={styles.stormOverlay}><Text style={[styles.stormText, { marginTop: insets.top }]}>⛈ BADAI SIMULASI · {safeZoneAt(playerPosition) ? 'AMAN DI SHELTER' : 'CARI SHELTER (EMERGENCY ZONE / GATEWAY)'}</Text></View> : null}
       <View pointerEvents="box-none" style={[styles.hudLayer, { top: insets.top, bottom: insets.bottom, left: insets.left, right: insets.right }]}>
       {/* ── Top-left: mini map + hero status ── */}
       <View pointerEvents="box-none" style={styles.mlTopLeft}>
         <TouchableOpacity onPress={() => { stopMovement(); setShowMap(true); }} style={styles.mlMapFrame} accessibilityRole="button" accessibilityLabel="Buka peta besar">
-          <MiniMap size={miniMapSize} playerPosition={playerPosition} targets={trackedTargets} label={nearbyLandmark?.short || currentZone?.short || 'MONAS ZONE'} />
+          <LiveMiniMap controlRef={moveControl} fallback={playerPosition} size={miniMapSize} targets={trackedTargets} wabah={WABAH_SPAWNS} label={nearbyLandmark?.short || currentZone?.short || environment.name.toUpperCase()} />
           <View pointerEvents="none" style={styles.miniMapZoomBadge}><FontAwesomeIcon icon={faMagnifyingGlassPlus} size={10} color="#071321" /></View>
         </TouchableOpacity>
         <StatusStack width={miniMapSize + 6} values={[health, energy, hydration, battery, supply].map(Math.round)} />
@@ -1005,7 +1630,9 @@ export default function TwiniSurvivalScreen({ navigation }) {
           <Text numberOfLines={1} style={styles.missionChipTitle}>🎯 {twin.trackedMission.title}{remainingSeconds(twin.trackedMission, trackedEntry) != null ? ` · ${formatTime(remainingSeconds(twin.trackedMission, trackedEntry))}` : ''}</Text>
           <View style={styles.missionChipTrack}><View style={[styles.missionChipFill, { width: `${progressRatio(twin.trackedMission, trackedEntry) * 100}%` }]} /></View>
         </TouchableOpacity> : null}
-        <View style={styles.tpChip}><Text numberOfLines={1} style={styles.tpChipText}>{twin.session ? `${twin.wallet.balance.toLocaleString('id-ID')} TP` : 'TP · offline'} · Lv {twin.profile?.level || 1} · {xp} XP</Text></View>
+        <TouchableOpacity onPress={() => openShop('weapons')} style={styles.tpChip} accessibilityRole="button" accessibilityLabel={`Buka toko dan upgrade. ${coins} koin, senjata ${weapon.name}`}>
+          <Text numberOfLines={1} style={styles.tpChipText}>{twin.session ? `${twin.wallet.balance.toLocaleString('id-ID')} TP` : 'TP · offline'} · Lv {twin.profile?.level || 1} · {xp} XP · 🪙 {coins} · 🔫 {weapon.short || weapon.name}</Text>
+        </TouchableOpacity>
         {message ? <View pointerEvents="none" style={styles.mlToast}><Text numberOfLines={2} style={styles.mlToastText}>{message}</Text></View> : null}
       </View>
       {/* ── Top-right: system buttons + camera controls ── */}
@@ -1041,7 +1668,11 @@ export default function TwiniSurvivalScreen({ navigation }) {
         </View>
       )}
       <View pointerEvents="none" style={styles.mlCaption}><Text style={styles.worldCaptionText}>© OSM</Text></View>
-      {nearTarget ? <View pointerEvents="none" style={[styles.interactPrompt, { bottom: controlsTop + 8 }]}><Text numberOfLines={1} style={styles.interactPromptText}>
+      <LiveSpeedometer controlRef={moveControl} boost={running && !!riding} bottom={controlsTop + 6} />
+      {!nearTarget && !nearNpc && !nearShop && nearVehicle && !riding ? <View pointerEvents="none" style={[styles.interactPrompt, { bottom: controlsTop + SK + 16, borderColor: 'rgba(125,255,181,0.7)' }]}><Text numberOfLines={1} style={styles.interactPromptText}>{VEHICLE_TYPES[nearVehicle.type].emoji} {nearVehicle.name} → tekan NAIK / INTERACT</Text></View> : null}
+      {nearNpc ? <View pointerEvents="none" style={[styles.interactPrompt, { bottom: controlsTop + SK + 16, borderColor: `${nearNpc.color}cc` }]}><Text numberOfLines={1} style={styles.interactPromptText}>💬 {nearNpc.icon} {nearNpc.name} · {nearNpc.role} → INTERACT untuk bicara</Text></View> : null}
+      {nearShop && !nearNpc ? <View pointerEvents="none" style={[styles.interactPrompt, { bottom: controlsTop + SK + 16, borderColor: `${nearShop.color}cc` }]}><Text numberOfLines={1} style={styles.interactPromptText}>🏪 {nearShop.name} · {nearShop.role} → INTERACT untuk buka toko</Text></View> : null}
+      {nearTarget && !nearNpc && !nearShop ? <View pointerEvents="none" style={[styles.interactPrompt, { bottom: controlsTop + SK + 16 }]}><Text numberOfLines={1} style={styles.interactPromptText}>
         {nearTarget.cooling ? `⏳ ${nearTarget.object.name} · ${nearTarget.cooling}s` : `◉ ${nearTarget.type.scan && !(nearTarget.state.lastScan && Date.now() - nearTarget.state.lastScan < SCAN_REPEAT_MS) ? 'SCAN' : nearTarget.type.actionLabel} · ${nearTarget.object.name}`} → INTERACT
       </Text></View> : null}
       {/* ── Bottom-left: virtual joystick ── */}
@@ -1069,6 +1700,7 @@ export default function TwiniSurvivalScreen({ navigation }) {
             { key: 'focus', label: 'FOCUS', icon: faVideo, color: '#9fe3ff', onPress: press.focus, a11y: 'Kamera ke belakang Twini' },
             { key: 'guide', label: 'GUIDE', icon: faLocationArrow, color: '#ffd36e', onPress: press.guide, a11y: 'Tunjukkan arah ke tujuan terdekat', active: !!guide },
             { key: 'item', label: 'ITEM', icon: faKitMedical, color: '#7dffb5', onPress: press.item, a11y: 'Pakai item yang paling dibutuhkan' },
+            { key: 'tele', label: 'TELE', icon: faWandMagicSparkles, color: '#c6a7ff', onPress: press.teleport, a11y: 'Teleport ke sensor, landmark, zona atau kendaraan' },
           ].map((action) => <SkillButton key={action.key} size={QUICK_SIZE} icon={action.icon} label={action.label} color={action.color} onPress={action.onPress} active={action.active} a11y={action.a11y} />)}
         </View>
         {/* ── Bottom-right: MOBA skill cluster ── */}
@@ -1077,16 +1709,24 @@ export default function TwiniSurvivalScreen({ navigation }) {
           <SkillButton size={SK_SMALL} icon={faPlay} label="PATROL" color="#8fe0ff" onPress={press.patrol} active={patrolMode} a11y={patrolMode ? 'Matikan patroli lurus kiri-tengah-kanan' : 'Aktifkan patroli lurus kiri-tengah-kanan'} style={skillAt(112.5, skR2, SK_SMALL)} />
           <SkillButton size={SK} glyph="↟" label="JUMP" color="#d9b8ff" onPress={press.jump} a11y="Lompat" style={skillAt(180, skR, SK)} />
           <SkillButton size={SK} icon={faBolt} label="DASH" color="#ffd36e" onPress={press.dash} a11y="Dash ke arah hadap" style={skillAt(135, skR, SK)} />
-          <SkillButton size={SK} icon={faWind} label={`RUN ${Math.round(stamina)}%`} color="#7fe7ff" onPress={press.run} active={running} a11y={running ? 'Matikan lari' : 'Aktifkan lari'} style={skillAt(90, skR, SK)} />
-          <SkillButton size={SK_MAIN} primary icon={faTowerBroadcast} label="INTERACT" color="#ffc54d" onPress={press.interact} a11y="Interaksi" active={!!nearTarget} style={skillAt(0, 0, SK_MAIN)} />
+          <SkillButton size={SK} icon={faWind} label={riding ? 'TURBO' : `RUN ${Math.round(stamina)}%`} color="#7fe7ff" onPress={press.run} active={running} a11y={riding ? (running ? 'Matikan turbo' : 'Aktifkan turbo') : running ? 'Matikan lari' : 'Aktifkan lari'} style={skillAt(90, skR, SK)} />
+          <SkillButton size={SK_MAIN} primary icon={faTowerBroadcast} label="INTERACT" color="#ffc54d" onPress={press.interact} a11y="Interaksi" active={!!nearTarget || !!nearNpc || !!nearShop} style={skillAt(0, 0, SK_MAIN)} />
         </View>
+        {/* ── Combat & vehicle row above the skill cluster ── */}
+        <View pointerEvents="box-none" style={[styles.combatRow, { bottom: CONTROLS_BOTTOM + clusterH + 6 }]}>
+          <SkillButton size={SK} icon={faWandMagicSparkles} label="TELEPORT" color="#c6a7ff" onPress={press.teleport} a11y="Teleport ke sensor, kendaraan, landmark atau zona" />
+          <SkillButton size={SK} icon={riding ? faArrowRightFromBracket : nearVehicle ? VEHICLE_ICON[nearVehicle.type] : faCar} label={riding ? 'TURUN' : nearVehicle ? 'NAIK' : 'KENDARAAN'} color="#7dffb5" onPress={press.ride} active={!riding && !!nearVehicle} a11y={riding ? `Turun dari ${riding.name}` : nearVehicle ? `Naik ${nearVehicle.name}` : 'Tunjukkan kendaraan terdekat'} />
+          <SkillButton size={SK} icon={faShieldHeart} label={`WABAH ${growth.cleared}`} color="#7cf5ff" onPress={() => setPanel('wabah')} active={growth.points > 0} a11y={`Panel wabah digital dan pertumbuhan kota, ${growth.points} poin`} />
+          <SkillButton size={Math.round(SK * 1.12)} icon={faBullseye} label={`FIRE ${ammo}`} color="#ff6b6b" onPress={press.fire} active={ammo >= ammoCap} a11y={`Tembak ${weapon.name}, sisa ${ammo}`} />
+        </View>
+        {(dronesDown || growth.cleared || coopRoom) ? <View pointerEvents="none" style={[styles.droneCounter, { bottom: CONTROLS_BOTTOM + clusterH + SK + 22 }]}><Text style={styles.droneCounterText}>{[dronesDown ? `🎯 ${dronesDown} drone` : null, growth.cleared ? `🦠 ${growth.cleared} wabah · 🏗️ ${growth.points} poin` : null, coopRoom ? `👥 ${coopRoom.code} ${coopRoom.members.length}/${coopRoom.maxPlayers}` : null].filter(Boolean).join(' · ')}</Text></View> : null}
       </View>
     </View>
     <Modal visible={showMap} transparent animationType="fade" supportedOrientations={['portrait', 'landscape']} onRequestClose={() => setShowMap(false)}>
       <View style={[styles.mapModalBackdrop, { paddingTop: insets.top + 12, paddingBottom: insets.bottom + 12 }]}>
         <View style={[styles.mapModalCard, landscape && styles.mapModalCardLandscape]}>
           {landscape ? null : mapHeader}
-          <WorldMap size={mapSize} zoom={mapZoom} playerPosition={playerPosition} facing={facingDirection.current} targets={trackedTargets} pickups={PICKUPS.filter((_, index) => !foundPickups.includes(index))} guide={guide} onPickPoint={(point) => setWaypoint(point, 'Titik tujuan')} />
+          <WorldMap size={mapSize} zoom={mapZoom} playerPosition={playerPosition} facing={facingDirection.current} targets={trackedTargets} pickups={PICKUPS.filter((_, index) => !foundPickups.includes(index))} guide={guide} envId={environmentId} vehicles={(moveControl.current.vehicles || []).map((v) => ({ id: v.id, type: v.type, pos: [v.pos[0], v.pos[1]] }))} wabah={WABAH_SPAWNS} onPickPoint={(point) => setWaypoint(point, 'Titik tujuan')} />
           <View style={landscape ? styles.mapModalSide : styles.mapModalBottom}>
             {landscape ? mapHeader : null}
             <View style={styles.mapZoomRow}>
@@ -1094,27 +1734,73 @@ export default function TwiniSurvivalScreen({ navigation }) {
               {[1, 2, 4].map((z) => <TouchableOpacity key={z} onPress={() => setMapZoom(z)} style={[styles.mapZoomChip, mapZoom === z && styles.mapZoomChipActive]} accessibilityRole="button" accessibilityState={{ selected: mapZoom === z }}><Text style={[styles.mapZoomText, mapZoom === z && styles.mapZoomTextActive]}>{z}×</Text></TouchableOpacity>)}
               <TouchableOpacity onPress={() => setMapZoom((z) => Math.min(4, z * 2))} style={styles.cameraZoomButton} accessibilityRole="button" accessibilityLabel="Perbesar peta"><FontAwesomeIcon icon={faPlus} size={14} color="#eaf4ff" /></TouchableOpacity>
             </View>
-            <Text style={styles.mapLegend}>▲ Twini  ● Energy Core  ◉ target misi  ◆ landmark{'\n'}Ketuk peta untuk menandai tujuan (panah kuning).</Text>
+            <Text style={styles.mapLegend}>▲ Twini  ● Energy Core  ◉ target misi  ◆ landmark  🚙🏍️🚤 kendaraan  🦠 wabah digital{'\n'}Ketuk peta untuk menandai tujuan (panah kuning).</Text>
             {guide ? <TouchableOpacity onPress={() => setGuide(null)} style={styles.mapClearGuide} accessibilityRole="button"><FontAwesomeIcon icon={faCrosshairs} size={11} color="#ffd36e" /><Text style={styles.mapClearGuideText}>Hapus tujuan · {guide.name}</Text></TouchableOpacity> : null}
+            {guide ? <TouchableOpacity onPress={() => { setShowMap(false); teleportTo(guide.position, guide.name); }} style={[styles.mapClearGuide, styles.mapTeleport]} accessibilityRole="button" accessibilityLabel={`Teleport ke ${guide.name}`}><FontAwesomeIcon icon={faWandMagicSparkles} size={11} color="#d9c8ff" /><Text style={[styles.mapClearGuideText, { color: '#e4d8ff' }]}>Teleport ke tujuan · −{TELEPORT_COST} energi</Text></TouchableOpacity> : null}
           </View>
+        </View>
+      </View>
+    </Modal>
+    <Modal visible={showTeleport} transparent animationType="slide" supportedOrientations={['portrait', 'landscape']} onRequestClose={() => setShowTeleport(false)}>
+      <View style={styles.missionsModalBackdrop}>
+        <View style={[styles.missionsModalCard, { paddingBottom: insets.bottom }]}>
+          <View style={styles.teleportHeader}>
+            <View style={{ flexShrink: 1 }}><Text style={styles.teleportTitle}>✨ TELEPORT</Text><Text style={styles.teleportSubtitle}>Pindah instan ke sensor, kendaraan, landmark atau zona · −{TELEPORT_COST} energi</Text></View>
+            <TouchableOpacity onPress={() => setShowTeleport(false)} style={styles.characterModalClose} accessibilityRole="button" accessibilityLabel="Tutup teleport"><FontAwesomeIcon icon={faXmark} size={15} color="#eaf4ff" /></TouchableOpacity>
+          </View>
+          <ScrollView contentContainerStyle={{ padding: 14, paddingTop: 4 }}>
+            {[
+              ['SENSOR IOT', iotObjects.map((object) => { const done = twin.objectState[object.id]?.done; return { key: object.id, icon: faTowerBroadcast, color: done ? '#62e0a9' : '#ffb86b', title: localizeObject(environmentId, object).name, detail: done ? 'ONLINE' : 'STANDBY · perlu diaktifkan', position: object.position }; })],
+              ['KENDARAAN', spawnVehicles(environmentId).map((spot) => { const live = (moveControl.current.vehicles || []).find((v) => v.id === spot.id) || spot; return { key: spot.id, icon: VEHICLE_ICON[spot.type], color: '#7fe7ff', title: `${VEHICLE_TYPES[spot.type].emoji} ${spot.name}`, detail: 'Teleport & langsung naik', position: live.pos, vehicleId: spot.id }; })],
+              ['LANDMARK', LANDMARKS.map((item) => { const l = localizeLandmark(environmentId, item); return { key: item.id, icon: faMapLocationDot, color: '#88c0ff', title: l.name, detail: foundLandmarks.includes(item.id) ? 'Sudah ditemukan' : 'Belum ditemukan', position: item.position }; })],
+              ['ZONA', ZONES.map((zone) => { const z = localizeZone(environmentId, zone); return { key: zone.id, icon: faCompass, color: zone.color || '#9fe3ff', title: z.name, detail: 'Pusat zona', position: zone.center }; })],
+              ['LAINNYA', [{ key: 'shop', icon: faStore, color: '#ffd178', title: 'Twini Shop District', detail: 'Toko, bengkel, garasi & gudang', position: SHOP_DISTRICT.door }, { key: 'spawn', icon: faLocationArrow, color: '#ffd36e', title: 'Titik awal', detail: 'Pelataran depan', position: [0, 8] }, { key: 'shelter', icon: faShieldHeart, color: '#ff8fa3', title: 'Gateway Shelter', detail: 'Aman saat badai', position: RESPAWN_POINT }]],
+            ].map(([section, items]) => <View key={section} style={styles.teleportSection}>
+              <Text style={styles.teleportSectionTitle}>{section}</Text>
+              {items.map((item) => {
+                const distance = Math.round(Math.hypot(item.position[0] - playerPosition[0], item.position[1] - playerPosition[1]));
+                return <TouchableOpacity key={item.key} onPress={() => teleportTo(item.position, item.title, item.vehicleId)} style={styles.teleportRow} accessibilityRole="button" accessibilityLabel={`Teleport ke ${item.title}, ${distance} meter`}>
+                  <View style={[styles.teleportIcon, { backgroundColor: `${item.color}22` }]}><FontAwesomeIcon icon={item.icon} size={13} color={item.color} /></View>
+                  <View style={{ flex: 1 }}><Text numberOfLines={1} style={styles.teleportRowTitle}>{item.title}</Text><Text numberOfLines={1} style={[styles.teleportRowDetail, { color: item.color }]}>{item.detail}</Text></View>
+                  <Text style={styles.teleportDistance}>{distance} m</Text>
+                </TouchableOpacity>;
+              })}
+            </View>)}
+          </ScrollView>
         </View>
       </View>
     </Modal>
     <Modal visible={showCharacterSettings} transparent animationType="fade" onRequestClose={() => setShowCharacterSettings(false)}>
       <View style={styles.characterModalBackdrop}>
         <View style={styles.characterModalCard}>
-          <View style={styles.characterModalHeader}><View><Text style={styles.characterModalTitle}>Pengaturan Karakter</Text><Text style={styles.characterModalSubtitle}>Pilih model GLB untuk permainan</Text></View><TouchableOpacity onPress={() => setShowCharacterSettings(false)} style={styles.characterModalClose} accessibilityRole="button" accessibilityLabel="Tutup pengaturan"><FontAwesomeIcon icon={faXmark} size={15} color="#eaf4ff" /></TouchableOpacity></View>
+          <View style={styles.characterModalHeader}><View><Text style={styles.characterModalTitle}>Pengaturan Karakter</Text><Text style={styles.characterModalSubtitle}>Ketuk gambar karakter untuk memilih</Text></View><TouchableOpacity onPress={() => setShowCharacterSettings(false)} style={styles.characterModalClose} accessibilityRole="button" accessibilityLabel="Tutup pengaturan"><FontAwesomeIcon icon={faXmark} size={15} color="#eaf4ff" /></TouchableOpacity></View>
           {PLAYABLE_CHARACTERS.map((character) => {
             const selected = selectedCharacterId === character.id;
             return <TouchableOpacity key={character.id} onPress={() => { setSelectedCharacterId(character.id); setMessage(`Karakter berganti ke ${character.name}.`); setShowCharacterSettings(false); }} style={[styles.characterModalOption, selected && styles.characterModalOptionSelected]} accessibilityRole="button" accessibilityState={{ selected }}>
-              <View><Text style={[styles.characterModalOptionTitle, selected && styles.characterModalOptionTitleSelected]}>{character.name}</Text><Text style={styles.characterModalOptionDetail}>Model 3D GLB</Text></View><Text style={styles.characterModalOptionMark}>{selected ? '✓' : '›'}</Text>
+              <Image source={characterArt(character.id)} style={styles.characterModalThumb} resizeMode="cover" accessibilityLabel={`Gambar ${character.name}`} />
+              <View style={{ flex: 1 }}><Text style={[styles.characterModalOptionTitle, selected && styles.characterModalOptionTitleSelected]}>{character.name}</Text></View><Text style={styles.characterModalOptionMark}>{selected ? '✓' : '›'}</Text>
             </TouchableOpacity>;
           })}
+          <Text style={[styles.characterModalSubtitle, { marginTop: 12 }]}>Environment (misi tetap sama)</Text>
+          <EnvironmentPicker compact value={environmentId} onChange={(id) => { setEnvironmentId(id); setCurrentZone(null); setMessage(`Pindah ke ${environmentById(id).name} · misi & progres tetap sama`); }} />
           <Text style={[styles.characterModalSubtitle, { marginTop: 12 }]}>Sensitivitas putar kamera</Text>
           <View style={styles.sensitivityRow}>{[0.5, 0.75, 1, 1.5, 2].map((value) => <TouchableOpacity key={value} onPress={() => setCameraSensitivity(value)} style={[styles.sensitivityOption, cameraSensitivity === value && styles.sensitivityOptionActive]} accessibilityRole="button" accessibilityState={{ selected: cameraSensitivity === value }}><Text style={[styles.sensitivityText, cameraSensitivity === value && styles.sensitivityTextActive]}>{value}×</Text></TouchableOpacity>)}</View>
         </View>
       </View>
     </Modal>
+    {npcTalk ? <Modal visible transparent animationType="fade" supportedOrientations={['portrait', 'landscape']} onRequestClose={() => setNpcTalk(null)}>
+      <View style={styles.missionsModalBackdrop}>
+        <View style={[styles.missionsModalCard, { padding: 16, paddingBottom: 16 + insets.bottom }]}>
+          <NpcDialogue
+            npc={npcById(npcTalk.id)}
+            lineIndex={npcTalk.line}
+            claimed={npcTalk.claimed}
+            onNext={nextNpcLine}
+            onClose={() => setNpcTalk(null)}
+          />
+        </View>
+      </View>
+    </Modal> : null}
     {interaction?.phase === 'scan' && interactionObject ? <ScanProgress name={interactionObject.name} onDone={onScanDone} /> : null}
     {interaction?.phase === 'info' && interactionObject ? <TwinInfoPanel object={interactionObject} type={OBJECT_TYPES[interactionObject.type]} state={twin.objectState[interactionObject.id] || {}} connection={battery} supply={supply} actionHint={actionHint} onAction={performObjectAction} onClose={() => setInteraction(null)} /> : null}
     {interaction?.phase === 'quiz' && interactionObject ? <QuizPanel object={interactionObject} onAnswer={answerQuiz} onClose={() => setInteraction(null)} /> : null}
@@ -1137,6 +1823,9 @@ export default function TwiniSurvivalScreen({ navigation }) {
           '• WAVE menyapa, FOCUS kamera ke belakang Twini, GUIDE panah ke tujuan, ITEM pakai item yang dibutuhkan',
           '• Ketuk mini map untuk peta besar (zoom 1×–4×, ketuk peta = tandai tujuan)',
           '• Tekan JUMP untuk melompat',
+          '• Dekati Mobil / Motor / Perahu lalu tekan NAIK (E): ▲ gas, ▼ rem/mundur, ◀▶ belok, RUN = turbo, TURUN untuk keluar',
+          '• FIRE (F) menembakkan pelontar plasma; drone polusi di depan terkunci otomatis (+30 XP)',
+          '• TELE (T) teleport ke sensor IoT, kendaraan, landmark, zona; di peta besar: "Teleport ke tujuan"',
           '• Tekan PATROL untuk gerak otomatis kiri→tengah→kanan',
           '• Dekati objek bercincin biru lalu tekan INTERACT untuk SCAN / aksi Digital Twin',
           '• Jaga HP, Energi, Hidrasi (H2O), Digital Connection (NET) dan Supply (SUP)',
@@ -1146,53 +1835,154 @@ export default function TwiniSurvivalScreen({ navigation }) {
     </View>}
   </View>;
 
-  if (panel === 'missions') return <ScrollView style={styles.screen} contentContainerStyle={styles.content}><ResponsiveContent>
+  if (panel === 'coop') return <View style={styles.screen}><TwiniMenuBackdrop width={width} height={height} calm /><ScrollView style={styles.screenClear} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled"><ResponsiveContent>
+    <TouchableOpacity onPress={backToMenu} style={styles.backButtonLight}><FontAwesomeIcon icon={faArrowLeft} size={13} color="#e7f2ff" /><Text style={styles.backText}>Menu TWINI</Text></TouchableOpacity>
+    <CoopPanel twin={twin} disciplineId={disciplineId} onRoomChange={(code, room) => { setCoopCode(code); setCoopRoom(room || null); }} onNotice={(text) => setMessage(text)} />
+  </ResponsiveContent></ScrollView></View>;
+
+  if (panel === 'shop') return <View style={styles.screen}><TwiniMenuBackdrop width={width} height={height} calm /><ScrollView style={styles.screenClear} contentContainerStyle={styles.content}><ResponsiveContent>
+    <TouchableOpacity onPress={backToMenu} style={styles.backButtonLight}><FontAwesomeIcon icon={faArrowLeft} size={13} color="#e7f2ff" /><Text style={styles.backText}>Menu TWINI</Text></TouchableOpacity>
+    <ShopPanel
+      initialTab={shopTab}
+      loadout={loadout}
+      coins={coins}
+      weapon={weapon}
+      buildingBonus={cityBonus}
+      vehicleStats={vehiclePerf}
+      onBuyWeapon={buyWeaponItem}
+      onEquipWeapon={equipWeaponItem}
+      onBuyAccessory={buyAccessoryItem}
+      onToggleAccessory={toggleAccessoryItem}
+      onBuyBuilding={buyBuildingItem}
+      onBuyVehicle={buyVehicleItem}
+      onBuyGrowth={buyGrowthPack}
+      onBackToGame={() => setPanel('game')}
+      notice={shopNotice}
+    />
+  </ResponsiveContent></ScrollView></View>;
+
+  if (panel === 'wabah') return <View style={styles.screen}><TwiniMenuBackdrop width={width} height={height} calm /><ScrollView style={styles.screenClear} contentContainerStyle={styles.content}><ResponsiveContent>
+    <TouchableOpacity onPress={backToMenu} style={styles.backButtonLight}><FontAwesomeIcon icon={faArrowLeft} size={13} color="#e7f2ff" /><Text style={styles.backText}>Menu TWINI</Text></TouchableOpacity>
+    <CityGrowthPanel growth={growth} onBuild={buildCityAsset} onFire={aimAndFireWabah} onBackToGame={() => setPanel('game')} unlockBonus={perks.unlockBonus || 0} modifiers={{ buildDiscount: perks.buildDiscount, buildFlat: perks.buildFlat }} bonus={cityBonus} />
+  </ResponsiveContent></ScrollView></View>;
+
+  if (panel === 'district') return <View style={styles.screen}><TwiniMenuBackdrop width={width} height={height} calm /><ScrollView style={styles.screenClear} contentContainerStyle={styles.content}><ResponsiveContent>
+    <TouchableOpacity onPress={backToMenu} style={styles.backButtonLight}><FontAwesomeIcon icon={faArrowLeft} size={13} color="#e7f2ff" /><Text style={styles.backText}>Menu TWINI</Text></TouchableOpacity>
+    <DistrictPanel
+      district={district}
+      coins={coins}
+      growthPoints={growth.points}
+      cleared={growth.cleared}
+      modifiers={{ buildDiscount: perks.buildDiscount, buildFlat: perks.buildFlat }}
+      notice={districtNotice}
+      onBuy={buyDistrictPlot}
+      onBuild={buildDistrictBuilding}
+      onCollect={collectDistrict}
+      onBackToGame={() => setPanel('game')}
+    />
+  </ResponsiveContent></ScrollView></View>;
+
+  if (panel === 'cosmetics') return <View style={styles.screen}><TwiniMenuBackdrop width={width} height={height} calm /><ScrollView style={styles.screenClear} contentContainerStyle={styles.content}><ResponsiveContent>
+    <TouchableOpacity onPress={backToMenu} style={styles.backButtonLight}><FontAwesomeIcon icon={faArrowLeft} size={13} color="#e7f2ff" /><Text style={styles.backText}>Menu TWINI</Text></TouchableOpacity>
+    <CosmeticsPanel
+      cosmetics={cosmetics}
+      coins={coins}
+      characters={CHARACTER_PROFILES}
+      characterId={selectedCharacterId}
+      notice={cosmeticsNotice}
+      onSelectCharacter={setSelectedCharacterId}
+      onBuy={buyCharacterCosmetic}
+      onEquip={equipCharacterCosmetic}
+      onUnequip={unequipCharacterCosmetic}
+      onToggleSlot={toggleCharacterCosmeticSlot}
+      onApplyAll={applyCosmeticsToAll}
+      onBackToGame={() => setPanel('game')}
+    />
+  </ResponsiveContent></ScrollView></View>;
+
+  if (panel === 'missions') return <View style={styles.screen}><TwiniMenuBackdrop width={width} height={height} calm /><ScrollView style={styles.screenClear} contentContainerStyle={styles.content}><ResponsiveContent>
     <TouchableOpacity onPress={backToMenu} style={styles.backButtonLight}><FontAwesomeIcon icon={faArrowLeft} size={13} color="#e7f2ff" /><Text style={styles.backText}>Menu TWINI</Text></TouchableOpacity>
     <MissionCenter twin={twin} />
-  </ResponsiveContent></ScrollView>;
+  </ResponsiveContent></ScrollView></View>;
 
-  if (panel === 'hub') return <ScrollView style={styles.screen} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled"><ResponsiveContent>
+  if (panel === 'hub') return <View style={styles.screen}><TwiniMenuBackdrop width={width} height={height} calm /><ScrollView style={styles.screenClear} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled"><ResponsiveContent>
     <TouchableOpacity onPress={backToMenu} style={styles.backButtonLight}><FontAwesomeIcon icon={faArrowLeft} size={13} color="#e7f2ff" /><Text style={styles.backText}>Menu TWINI</Text></TouchableOpacity>
     <TwinHub twin={twin} section={hubSection} onSection={setHubSection} navigation={navigation} stats={{ survivalSeconds }} />
-  </ResponsiveContent></ScrollView>;
+  </ResponsiveContent></ScrollView></View>;
 
-  if (panel === 'inventory') return <ScrollView style={styles.screen} contentContainerStyle={styles.content}><ResponsiveContent>
+  if (panel === 'inventory') return <View style={styles.screen}><TwiniMenuBackdrop width={width} height={height} calm /><ScrollView style={styles.screenClear} contentContainerStyle={styles.content}><ResponsiveContent>
     <TouchableOpacity onPress={backToMenu} style={styles.backButtonLight}><FontAwesomeIcon icon={faArrowLeft} size={13} color="#e7f2ff" /><Text style={styles.backText}>Menu TWINI</Text></TouchableOpacity>
     <Text style={styles.pageEyebrow}>TWNI FIELD KIT</Text><Text style={styles.pageTitle}>Inventory</Text><Text style={styles.pageSubtitle}>Resource yang ditemukan selama eksplorasi Jakarta.</Text>
     <View style={styles.inventoryCard}><Text style={styles.inventoryEmoji}>🎒</Text><View style={styles.inventoryCopy}><Text style={styles.inventoryTitle}>Status survival</Text><Text style={styles.inventoryDescription}>HP {Math.round(health)}% · Energi {Math.round(energy)}% · Hidrasi {Math.round(hydration)}% · Connection {Math.round(battery)}% · Supply {Math.round(supply)}%</Text><Text style={styles.inventoryCount}>Aset Digital Twin: {twin.ownedAssetIds.size}/{twin.assets.length} · lihat Twin Hub → Aset</Text></View></View>
     {[['crystals', 'Energy Crystal', 'Kristal data untuk memulihkan digital battery.', '💎'], ['batteries', 'Battery Pack', 'Mengisi ulang battery dan energy Twini.', '🔋'], ['kits', 'Health Kit', 'Memulihkan health saat menghadapi kondisi ekstrem.', '🩹'], ['fragments', 'Data Fragment', 'Potongan data landmark dan infrastruktur kota.', '🔷'], ['water', 'Botol Air', 'Memulihkan hidrasi +40.', '💧'], ['repairKits', 'Repair Kit', 'Memperbaiki perangkat digital: Digital Connection +50.', '🛠️']].map(([id, title, detail, emoji]) => <View key={id} style={styles.inventoryCard}><Text style={styles.inventoryEmoji}>{emoji}</Text><View style={styles.inventoryCopy}><Text style={styles.inventoryTitle}>{title}</Text><Text style={styles.inventoryDescription}>{detail}</Text><Text style={styles.inventoryCount}>Dimiliki: {inventory[id] || 0}</Text></View>{['kits', 'batteries', 'water', 'repairKits'].includes(id) && <TouchableOpacity onPress={() => useItem(id)} disabled={inventory[id] <= 0} style={[styles.useButton, inventory[id] <= 0 && styles.useDisabled]}><Text style={styles.useButtonText}>Gunakan</Text></TouchableOpacity>}</View>)}
-  </ResponsiveContent></ScrollView>;
+  </ResponsiveContent></ScrollView></View>;
 
-  if (panel === 'dashboard') return <ScrollView style={styles.screen} contentContainerStyle={styles.content}><ResponsiveContent>
+  if (panel === 'dashboard') return <View style={styles.screen}><TwiniMenuBackdrop width={width} height={height} calm /><ScrollView style={styles.screenClear} contentContainerStyle={styles.content}><ResponsiveContent>
     <TouchableOpacity onPress={backToMenu} style={styles.backButtonLight}><FontAwesomeIcon icon={faArrowLeft} size={13} color="#e7f2ff" /><Text style={styles.backText}>Menu TWINI</Text></TouchableOpacity>
     <Text style={styles.pageEyebrow}>IDTC · SIMULATED TELEMETRY</Text><Text style={styles.pageTitle}>Digital Twin Dashboard</Text><Text style={styles.pageSubtitle}>Data berikut disimulasikan untuk prototipe edukasi, bukan sensor live.</Text>
     <View style={styles.telemetryGrid}>{[[faCloudSun, 'Suhu', '34°C', 'Kondisi panas', '#ffbf72'], [faDroplet, 'Kelembapan', '72%', 'Sensor taman', '#81ceff'], [faWind, 'Kualitas udara', 'AQI 84', 'Sedang', '#8de0b5'], [faTowerBroadcast, 'Kecepatan angin', '11 km/j', 'Diperbarui sekarang', '#c6a7ff']].map(([icon, title, value, note, color]) => <View key={title} style={styles.telemetryCard}><FontAwesomeIcon icon={icon} size={17} color={color} /><Text style={styles.telemetryTitle}>{title}</Text><Text style={styles.telemetryValue}>{value}</Text><Text style={styles.telemetryNote}>{note} · SIMULASI</Text></View>)}</View>
     <View style={styles.sensorDashCard}><Text style={styles.menuSectionTitle}>Perangkat IoT di sekitar</Text>{iotObjects.map((object) => <View key={object.id} style={styles.sensorDashRow}><View style={[styles.sensorStatusDot, twin.objectState[object.id]?.done && styles.sensorActiveDot]} /><Text style={styles.sensorDashName}>{object.name}</Text><Text style={styles.sensorDashValue}>{twin.objectState[object.id]?.done ? 'ONLINE' : 'STANDBY'}</Text></View>)}</View>
     <View style={styles.mapSectionHeader}><View><Text style={styles.menuSectionTitle}>Open Maps · OpenStreetMap</Text><Text style={styles.panelHint}>Peta Jakarta tersemat langsung di TWINI.</Text></View><TouchableOpacity onPress={() => Linking.openURL('https://www.openstreetmap.org/#map=14/-6.208/106.816').catch(() => {})} style={styles.mapOpenButton}><Text style={styles.mapOpenText}>Buka penuh</Text></TouchableOpacity></View>
     <View style={styles.embeddedMap}><OpenStreetMapEmbed /></View>
-  </ResponsiveContent></ScrollView>;
+  </ResponsiveContent></ScrollView></View>;
 
-  return <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
+  return <View style={styles.screen}>
+    <TwiniMenuBackdrop width={width} height={height} />
+    <ScrollView style={styles.screenClear} contentContainerStyle={styles.content}>
     <ResponsiveContent>
       <View style={[styles.homeHeader, compact && styles.homeHeaderCompact]}>
         <View style={styles.brandPill}><Image source={require('../../../assets/twini-logo.png')} style={styles.brandLogo} resizeMode="contain" /><Text style={styles.brandText}>TWINI <Text style={styles.brandSub}>· IDTC</Text></Text></View>
-        <View style={styles.locationBadge}><View style={styles.liveDot} /><Text style={styles.locationBadgeText}>JAKARTA · MONAS</Text></View>
+        <View style={styles.homeHeaderRight}>
+          <View style={styles.locationBadge}><View style={styles.liveDot} /><Text style={styles.locationBadgeText}>{environment.emoji} {environment.name.toUpperCase()}</Text></View>
+          <TouchableOpacity onPress={() => setMusicOn((value) => !value)} style={[styles.musicButton, musicOn && musicAvailable && styles.musicButtonOn]} accessibilityRole="button" accessibilityState={{ selected: musicOn }} accessibilityLabel={musicOn ? 'Matikan musik' : 'Nyalakan musik'}>
+            <FontAwesomeIcon icon={musicOn && musicAvailable ? faMusic : faVolumeXmark} size={13} color={musicOn && musicAvailable ? '#1a0b2e' : '#d9c8ff'} />
+          </TouchableOpacity>
+        </View>
       </View>
       <View style={[styles.hero, compact && styles.heroCompact]}>
-        <View style={styles.heroGlow} />
+        {/* Rotating Twini portrait on the right, colour wash on top for legible text */}
+        <CyclingTwini style={compact ? styles.heroArtCompact : styles.heroArt} interval={3800} />
+        <LinearGradient pointerEvents="none" colors={compact ? ['rgba(255,60,172,0.62)', 'rgba(110,50,220,0.72)', 'rgba(20,150,210,0.78)'] : ['rgba(120,30,190,0.94)', 'rgba(255,60,172,0.62)', 'rgba(43,210,255,0.14)']} start={compact ? { x: 0.5, y: 0 } : { x: 0, y: 0.5 }} end={compact ? { x: 0.5, y: 1 } : { x: 1, y: 0.5 }} style={StyleSheet.absoluteFill} />
         <View style={styles.heroCopy}>
-          <Text style={styles.heroEyebrow}>DIGITAL TWIN SURVIVAL · PHASE 01</Text>
+          <Text style={styles.heroEyebrow}>✦ DIGITAL TWIN SURVIVAL · PHASE 01 ✦</Text>
           <Text style={[styles.heroTitle, { fontSize: heroFontSize, lineHeight: Math.round(heroFontSize * 1.12) }]} numberOfLines={3}>
-            {'Explore.\nSurvive.\nLearn.'}
+            <Text style={{ color: '#6fe9ff' }}>Explore.</Text>{'\n'}<Text style={{ color: '#ff8fd8' }}>Survive.</Text>{'\n'}<Text style={{ color: '#ffd56e' }}>Learn.</Text>
           </Text>
           <Text style={styles.heroDescription}>TWINI: Monas Survival Adventure. Explore. Survive. Learn. Build the Future.</Text>
         </View>
         <View style={styles.characterPicker}>
-          <View style={styles.characterPreview}><Image source={require('../../../assets/twini-logo.png')} style={styles.characterLogo} resizeMode="contain" /><View style={styles.characterOrb}><FontAwesomeIcon icon={faGamepad} size={16} color="#bde3ff" /></View></View>
+          <View style={styles.characterPreview}>
+            <Image source={characterArt(selectedCharacter.id)} style={styles.characterThumb} resizeMode="cover" accessibilityLabel={`Gambar ${selectedCharacter.name}`} />
+            <View style={styles.characterOrb}><FontAwesomeIcon icon={faGamepad} size={16} color="#bde3ff" /></View>
+          </View>
           <Text style={styles.characterCaption}>{selectedCharacter.name}</Text>
-          <Text style={styles.characterPickerLabel}>PILIH KARAKTER GLB</Text>
-          <View style={styles.characterOptions}>{PLAYABLE_CHARACTERS.map((character) => <TouchableOpacity key={character.id} onPress={() => setSelectedCharacterId(character.id)} style={[styles.characterOption, selectedCharacterId === character.id && styles.characterOptionSelected]} accessibilityRole="button" accessibilityState={{ selected: selectedCharacterId === character.id }} accessibilityLabel={`Pilih karakter ${character.name}`}><Text numberOfLines={1} style={[styles.characterOptionText, selectedCharacterId === character.id && styles.characterOptionTextSelected]}>{character.name}</Text></TouchableOpacity>)}</View>
+          <View style={styles.characterOptions}>{PLAYABLE_CHARACTERS.map((character) => <TouchableOpacity key={character.id} onPress={() => setSelectedCharacterId(character.id)} style={[styles.characterOption, selectedCharacterId === character.id && styles.characterOptionSelected]} accessibilityRole="button" accessibilityState={{ selected: selectedCharacterId === character.id }} accessibilityLabel={`Pilih karakter ${character.name}`}>
+            <Image source={characterArt(character.id)} style={[styles.characterOptionImage, selectedCharacterId === character.id && styles.characterOptionImageSelected]} resizeMode="cover" />
+            <Text numberOfLines={1} style={[styles.characterOptionText, selectedCharacterId === character.id && styles.characterOptionTextSelected]}>{character.name}</Text>
+          </TouchableOpacity>)}</View>
         </View>
+        {/* Disiplin ilmu: memberi efek gameplay nyata (lihat data/disciplines.js). */}
+        <View style={styles.disciplineSection}>
+          <Text style={styles.characterPickerLabel}>DISCIPLINE · PROFESI KARAKTER</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 6, paddingVertical: 6 }}>
+            {DISCIPLINES.map((item) => {
+              const active = disciplineId === item.id;
+              return <TouchableOpacity
+                key={item.id}
+                onPress={() => { setDisciplineId(item.id); setMessage(`Disiplin dipilih: ${item.name} — ${item.perk}`); }}
+                style={[styles.disciplineCard, active && { borderColor: item.color, backgroundColor: `${item.color}22` }]}
+                accessibilityRole="button"
+                accessibilityState={{ selected: active }}
+                accessibilityLabel={`Pilih disiplin ${item.name}. ${item.perk}`}
+              >
+                <Text style={styles.disciplineIcon}>{item.icon}</Text>
+                <Text numberOfLines={1} style={[styles.disciplineName, active && { color: item.color }]}>{item.short}</Text>
+              </TouchableOpacity>;
+            })}
+          </ScrollView>
+          <Text style={styles.disciplinePerk}>{disciplineById(disciplineId).icon} {disciplineById(disciplineId).name} · {disciplineById(disciplineId).perk}</Text>
+        </View>
+        {/* Primary action sits right below the character picker. */}
         <View style={styles.startButtonCenter}>
           <View style={styles.startButtonWrap}>
             <Animated.View
@@ -1202,10 +1992,15 @@ export default function TwiniSurvivalScreen({ navigation }) {
                 transform: [{ scale: startPulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.45] }) }],
               }]}
             />
-            <TouchableOpacity onPress={startGame} style={styles.startButton} accessibilityRole="button">
-              <FontAwesomeIcon icon={faPlay} size={13} color="#071321" /><Text style={styles.startButtonText}>Mulai Eksplorasi</Text>
+            <TouchableOpacity onPress={startGame} activeOpacity={0.85} style={styles.startButton} accessibilityRole="button" accessibilityLabel="Mulai Eksplorasi">
+              <LinearGradient pointerEvents="none" colors={['#ffe27a', '#ff9a5c', '#ff6ec7']} start={{ x: 0, y: 0.5 }} end={{ x: 1, y: 0.5 }} style={StyleSheet.absoluteFill} />
+              <FontAwesomeIcon icon={faPlay} size={13} color="#2a0d2e" /><Text style={styles.startButtonText}>Mulai Eksplorasi</Text>
             </TouchableOpacity>
           </View>
+        </View>
+        <View style={styles.envSection}>
+          <Text style={styles.characterPickerLabel}>PILIH ENVIRONMENT · MISI SAMA, DUNIA BERBEDA</Text>
+          <EnvironmentPicker value={environmentId} onChange={setEnvironmentId} />
         </View>
         <View style={styles.heroFooter}><Text style={styles.heroFooterText}>EXPLORE</Text><Text style={styles.heroFooterDot}>·</Text><Text style={styles.heroFooterText}>SURVIVE</Text><Text style={styles.heroFooterDot}>·</Text><Text style={styles.heroFooterText}>CONNECT</Text><Text style={styles.heroFooterDot}>·</Text><Text style={styles.heroFooterText}>TRANSFORM</Text></View>
       </View>
@@ -1227,6 +2022,11 @@ export default function TwiniSurvivalScreen({ navigation }) {
         <MenuButton icon={faBatteryThreeQuarters} title="Inventory" detail={`${inventory.crystals} crystal · ${inventory.kits} health kit`} onPress={() => setPanel('inventory')} accent="#7fcfff" />
         <MenuButton icon={faTowerBroadcast} title="Digital Twin" detail="Cuaca, kualitas udara, dan sensor" onPress={() => setPanel('dashboard')} accent="#72e0bd" />
         <MenuButton icon={faMapLocationDot} title="Bangun Kota" detail="Buka mode city builder 3D" onPress={() => navigation.navigate('CityBuilder')} accent="#c7a5ff" />
+        <MenuButton icon={faShieldHeart} title="Wabah & Pertumbuhan Kota" detail={`${growth.cleared} wabah dinetralkan · ${growth.points} poin · ${WABAH_SPAWNS.length} titik pencarian`} onPress={() => setPanel('wabah')} accent="#7cf5ff" />
+        <MenuButton icon={faMapLocationDot} title="Wilayah & Petak" detail={`${districtSummary(district).owned}/${DISTRICT_PLOTS.length} petak · ${districtSummary(district).built} bangunan · 🪙 ${districtSummary(district).coinsPerMin}/mnt · ⭐ ${districtSummary(district).growthPerMin}/mnt`} onPress={() => setPanel('district')} accent="#ffd178" />
+        <MenuButton icon={faShirt} title="Atribut Karakter" detail={`${cosmeticsSummary(cosmetics, selectedCharacterId).active}/4 aktif · ${cosmeticsSummary(cosmetics, selectedCharacterId).owned}/${cosmeticsSummary(cosmetics, selectedCharacterId).total} dimiliki · profil ${selectedCharacter?.name || 'Twini'}`} onPress={() => setPanel('cosmetics')} accent="#ff9fd0" />
+        <MenuButton icon={faStore} title="Toko & Upgrade" detail={`${weapon.name} · ${coins} koin · distrik toko utara Monas`} onPress={() => openShop('weapons')} accent="#ffd178" />
+        <MenuButton icon={faUser} title="Multiplayer Co-op" detail={coopRoom ? `Ruangan ${coopRoom.code} · ${coopRoom.members.length}/${coopRoom.maxPlayers} pemain · ${coopRoom.status === 'completed' ? 'MISI TUNTAS' : 'berjalan'}` : `Buat/join ruangan misi tim · ${disciplineById(disciplineId).short}`} onPress={() => setPanel('coop')} accent="#9fd5ff" />
         <MenuButton icon={faCompass} title="OpenStreetMap" detail="Lihat peta Jakarta di dalam aplikasi" onPress={() => setPanel('dashboard')} accent="#85c9ff" />
       </View>
 
@@ -1237,7 +2037,9 @@ export default function TwiniSurvivalScreen({ navigation }) {
       </View>
       <Text style={styles.poweredBy}>Powered by Indonesia Digital Twin Community</Text>
     </ResponsiveContent>
-  </ScrollView>;
+  </ScrollView>
+    <MenuOverlayFx width={width} height={height} count={compact ? 7 : 11} />
+  </View>;
 }
 
 const styles = StyleSheet.create({
@@ -1262,6 +2064,16 @@ const styles = StyleSheet.create({
   sensitivityText: { color: '#a9bdd6', fontWeight: '800', fontSize: 12 },
   sensitivityTextActive: { color: '#5fd3ff' },
   screen: { flex: 1, backgroundColor: '#080f1c' },
+  screenClear: { flex: 1, backgroundColor: 'transparent' },
+  miniVehicle: { position: 'absolute', width: 6, height: 6, marginLeft: -3, marginTop: -3, borderRadius: 1.5, backgroundColor: '#7dffb5', borderWidth: 1, borderColor: '#06301c' },
+  miniWabah: { position: 'absolute', width: 7, height: 7, marginLeft: -3.5, marginTop: -3.5, borderRadius: 1.5, borderWidth: 1, borderColor: '#06121f' },
+  bigMapVehicle: { position: 'absolute', fontSize: 14, marginLeft: -8, marginTop: -9 },
+  bigMapWabah: { position: 'absolute', fontSize: 12, marginLeft: -7, marginTop: -8 },
+  homeHeaderRight: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  musicButton: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(120,90,220,0.28)', borderWidth: 1, borderColor: 'rgba(198,167,255,0.6)' },
+  musicButtonOn: { backgroundColor: '#ffd56e', borderColor: '#fff0b8' },
+  heroArt: { left: '40%' },
+  heroArtCompact: { opacity: 0.75 },
   content: { flexGrow: 1, paddingTop: 20, paddingBottom: 35 },
   homeHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 17 },
   homeHeaderCompact: { alignItems: 'flex-start' },
@@ -1269,36 +2081,54 @@ const styles = StyleSheet.create({
   brandLogo: { width: 32, height: 32 },
   brandText: { color: '#f0f6ff', fontSize: 13, fontWeight: '900', letterSpacing: 1.2 },
   brandSub: { color: '#8dabc9', fontSize: 10, fontWeight: '700' },
-  locationBadge: { flexDirection: 'row', alignItems: 'center', gap: 7, paddingHorizontal: 10, paddingVertical: 7, borderRadius: 14, backgroundColor: 'rgba(62,203,155,0.1)', borderWidth: 1, borderColor: 'rgba(95,219,177,0.18)' },
+  locationBadge: { flexDirection: 'row', alignItems: 'center', gap: 7, paddingHorizontal: 10, paddingVertical: 7, borderRadius: 14, backgroundColor: 'rgba(62,203,155,0.22)', borderWidth: 1, borderColor: 'rgba(125,255,181,0.55)' },
   liveDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#5de0ad' },
   locationBadgeText: { color: '#a5dcca', fontSize: 8, fontWeight: '800', letterSpacing: 0.8 },
-  hero: { position: 'relative', flexDirection: 'row', flexWrap: 'wrap', minHeight: 330, overflow: 'hidden', padding: 24, borderRadius: 27, backgroundColor: '#101d31', borderWidth: 1, borderColor: 'rgba(147,198,255,0.2)' },
+  hero: { position: 'relative', flexDirection: 'row', flexWrap: 'wrap', minHeight: 330, overflow: 'hidden', padding: 24, borderRadius: 27, backgroundColor: '#5a1fa8', borderWidth: 2, borderColor: 'rgba(255,214,110,0.85)' },
   heroCompact: { padding: 19, minHeight: 390 },
   heroGlow: { position: 'absolute', right: -70, top: -100, width: 290, height: 290, borderRadius: 145, backgroundColor: 'rgba(46,132,235,0.16)' },
   heroCopy: { flex: 1, minWidth: 240, justifyContent: 'center', zIndex: 1 },
-  heroEyebrow: { color: '#89c3ff', fontSize: 8, fontWeight: '900', letterSpacing: 1.25 },
+  heroEyebrow: { color: '#ffd56e', fontSize: 8, fontWeight: '900', letterSpacing: 1.25 },
   heroTitle: { maxWidth: '100%', flexShrink: 1, color: '#f3f7ff', fontWeight: '900', letterSpacing: -1.3, marginTop: 13 },
   heroDescription: { maxWidth: 330, color: '#a0b2c9', fontSize: 11, lineHeight: 17, marginTop: 12 },
-  startButtonCenter: { width: '100%', alignItems: 'center', marginTop: 8 },
+  startButtonCenter: { width: '100%', alignItems: 'center', marginTop: 10 },
   startButtonWrap: { position: 'relative' },
-  startButtonPulse: { ...StyleSheet.absoluteFill, borderRadius: 16, borderWidth: 2, borderColor: '#ffc45f' },
-  startButton: { minHeight: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 9, paddingHorizontal: 18, borderRadius: 15, backgroundColor: '#9dcbff', borderWidth: 1, borderColor: '#d5eaff' },
+  startButtonPulse: { ...StyleSheet.absoluteFill, borderRadius: 16, borderWidth: 2, borderColor: '#ff8fd8' },
+  startButton: { minHeight: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 9, paddingHorizontal: 18, borderRadius: 15, overflow: 'hidden', backgroundColor: '#ffb45c', borderWidth: 1.5, borderColor: '#fff0c4' },
   startButtonText: { color: '#071321', fontSize: 10, fontWeight: '900' },
   characterPicker: { width: '100%', minHeight: 205, alignItems: 'center', justifyContent: 'center', alignSelf: 'center', marginLeft: 10 },
   characterPreview: { position: 'relative', alignItems: 'center', justifyContent: 'center' },
   characterLogo: { width: 118, height: 118, opacity: 0.93 },
+  // Character thumbnails replace the old "3D GLB" text labels: the object is shown as an image.
+  characterThumb: { width: 82, height: 82, borderRadius: 41, borderWidth: 2, borderColor: 'rgba(190,235,255,0.6)', backgroundColor: '#0b1626' },
+  characterOptionImage: { width: 46, height: 46, borderRadius: 10, backgroundColor: '#0b1626' },
+  characterOptionImageSelected: { borderWidth: 2, borderColor: '#72c7ff' },
+  characterModalThumb: { width: 44, height: 44, borderRadius: 12, marginRight: 10, backgroundColor: '#0b1626' },
+  disciplineSection: { width: '100%', alignItems: 'center', marginTop: 8 },
+  disciplineCard: { width: 62, alignItems: 'center', paddingVertical: 6, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(150,190,230,0.22)', backgroundColor: 'rgba(10,22,40,0.55)' },
+  disciplineIcon: { fontSize: 20 },
+  disciplineName: { color: '#cfe1f4', fontSize: 9, fontWeight: '800', marginTop: 2, maxWidth: 56, textAlign: 'center' },
+  disciplinePerk: { color: '#9fc3e6', fontSize: 9.5, fontWeight: '700', marginTop: 4, textAlign: 'center', paddingHorizontal: 8 },
   characterOrb: { position: 'absolute', right: 16, top: 22, width: 37, height: 37, alignItems: 'center', justifyContent: 'center', borderRadius: 19, backgroundColor: 'rgba(91,157,239,0.2)', borderWidth: 1, borderColor: 'rgba(163,215,255,0.28)' },
   characterCaption: { color: '#e8f4ff', fontSize: 11, fontWeight: '800', letterSpacing: 0.5, marginTop: 1 },
+  envSection: { width: '100%', alignItems: 'center', marginTop: 10 },
+  envGrid: { width: '100%', maxWidth: 420, gap: 7, marginTop: 7 },
+  envCard: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 12, paddingVertical: 9, borderRadius: 14, borderWidth: 1, borderColor: 'rgba(150,190,230,0.22)', backgroundColor: 'rgba(10,22,40,0.55)' },
+  envCardCompact: { paddingVertical: 7 },
+  envEmoji: { fontSize: 22 },
+  envName: { color: '#e8f2ff', fontSize: 13, fontWeight: '800' },
+  envSubtitle: { color: '#8ea6c1', fontSize: 10.5, marginTop: 1 },
+  envCheck: { fontSize: 16, fontWeight: '900' },
   characterPickerLabel: { color: '#86a6c5', fontSize: 8, fontWeight: '800', letterSpacing: 1.1, marginTop: 7 },
   characterOptions: { flexDirection: 'row', justifyContent: 'center', flexWrap: 'wrap', gap: 5, marginTop: 6, maxWidth: 350 },
-  characterOption: { borderWidth: 1, borderColor: '#42556d', borderRadius: 12, paddingHorizontal: 8, paddingVertical: 5, backgroundColor: '#101d2b' },
+  characterOption: { borderWidth: 1, borderColor: '#42556d', borderRadius: 12, paddingHorizontal: 5, paddingVertical: 5, backgroundColor: '#101d2b', alignItems: 'center', minWidth: 58 },
   characterOptionSelected: { borderColor: '#72c7ff', backgroundColor: '#1e4560' },
   characterOptionText: { color: '#a8bdd2', fontSize: 8, fontWeight: '700' },
   characterOptionTextSelected: { color: '#eaf7ff' },
   heroFooter: { width: '100%', flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginTop: 15, paddingTop: 14, borderTopWidth: 1, borderTopColor: 'rgba(217,236,255,0.1)' },
   heroFooterText: { color: '#8da6c3', fontSize: 8, fontWeight: '900', letterSpacing: 1.1 },
   heroFooterDot: { color: '#4f83b8', fontSize: 12 },
-  playerPanel: { marginTop: 15, padding: 16, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.05)', borderWidth: 1, borderColor: 'rgba(226,241,255,0.11)' },
+  playerPanel: { marginTop: 15, padding: 16, borderRadius: 20, backgroundColor: 'rgba(120,40,190,0.5)', borderWidth: 1.5, borderColor: 'rgba(111,233,255,0.8)' },
   playerPanelHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 10, marginBottom: 13 },
   menuSectionTitle: { color: '#edf5ff', fontSize: 13, fontWeight: '800' },
   panelHint: { color: '#7f92aa', fontSize: 9, marginTop: 4 },
@@ -1320,7 +2150,7 @@ const styles = StyleSheet.create({
   summaryText: { color: '#96a8bd', fontSize: 8 },
   menuSectionHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', marginTop: 24, marginBottom: 10 },
   menuGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 9 },
-  menuCard: { flexGrow: 1, flexBasis: '47%', minWidth: 220, minHeight: 66, flexDirection: 'row', alignItems: 'center', gap: 10, padding: 12, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.045)', borderWidth: 1, borderColor: 'rgba(225,240,255,0.1)' },
+  menuCard: { flexGrow: 1, flexBasis: '47%', minWidth: 220, minHeight: 66, flexDirection: 'row', alignItems: 'center', gap: 10, padding: 12, borderRadius: 16, backgroundColor: 'rgba(22,16,64,0.6)', borderWidth: 1, borderLeftWidth: 4, borderColor: 'rgba(225,240,255,0.1)' },
   menuIcon: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center', borderRadius: 12 },
   menuCardCopy: { flex: 1 },
   menuCardTitle: { color: '#eaf2fd', fontSize: 10, fontWeight: '800' },
@@ -1592,6 +2422,23 @@ const styles = StyleSheet.create({
   mlKnob: { position: 'absolute', alignItems: 'center', justifyContent: 'center', backgroundColor: '#3f8fe0', borderWidth: 2, borderColor: 'rgba(225,245,255,0.9)' },
   mlKnobInner: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   mlCluster: { position: 'absolute', right: 16, zIndex: 7 },
+  combatRow: { position: 'absolute', right: 16, flexDirection: 'row', alignItems: 'flex-end', gap: 10, zIndex: 7 },
+  droneCounter: { position: 'absolute', right: 18, paddingHorizontal: 9, paddingVertical: 4, borderRadius: 10, backgroundColor: 'rgba(40,8,16,0.72)', borderWidth: 1, borderColor: 'rgba(255,107,107,0.5)', zIndex: 7 },
+  droneCounterText: { color: '#ffd0d0', fontSize: 10, fontWeight: '900' },
+  speedo: { position: 'absolute', alignSelf: 'center', bottom: 20, flexDirection: 'row', alignItems: 'baseline', gap: 6, paddingHorizontal: 14, paddingVertical: 6, borderRadius: 16, backgroundColor: 'rgba(6,14,28,0.78)', borderWidth: 1, borderColor: 'rgba(127,231,255,0.45)', zIndex: 6 },
+  speedoValue: { color: '#eaf8ff', fontSize: 20, fontWeight: '900', fontVariant: ['tabular-nums'] },
+  speedoUnit: { color: '#8fdcff', fontSize: 9, fontWeight: '800' },
+  mapTeleport: { borderColor: 'rgba(198,167,255,0.55)', backgroundColor: 'rgba(110,80,200,0.18)', marginTop: 8 },
+  teleportHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, paddingHorizontal: 16, paddingTop: 14, paddingBottom: 6 },
+  teleportTitle: { color: '#e4d8ff', fontSize: 15, fontWeight: '900', letterSpacing: 1 },
+  teleportSubtitle: { color: '#93a6bf', fontSize: 10, marginTop: 3 },
+  teleportSection: { marginTop: 10 },
+  teleportSectionTitle: { color: '#7f93ad', fontSize: 9, fontWeight: '900', letterSpacing: 1.2, marginBottom: 6 },
+  teleportRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 9, paddingHorizontal: 10, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.04)', marginBottom: 6 },
+  teleportIcon: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
+  teleportRowTitle: { color: '#e6f0fb', fontSize: 12, fontWeight: '800' },
+  teleportRowDetail: { fontSize: 9, fontWeight: '700', marginTop: 2 },
+  teleportDistance: { color: '#9fb3cc', fontSize: 10, fontWeight: '800', fontVariant: ['tabular-nums'] },
   mlClusterHalo: { position: 'absolute', borderWidth: 1, borderColor: 'rgba(143,220,255,0.16)', backgroundColor: 'rgba(8,20,40,0.12)' },
   skillOuter: { borderWidth: 1.5, alignItems: 'center', justifyContent: 'center' },
   skillOuterActive: { shadowOpacity: 0.95, shadowRadius: 14 },

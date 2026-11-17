@@ -103,12 +103,8 @@ export default function RegisterScreen({ navigation }) {
               <TextInput placeholder="you@example.com" placeholderTextColor="#718096" value={email} onChangeText={setEmail} autoCapitalize="none" autoCorrect={false} autoComplete="email" textContentType="emailAddress" keyboardType="email-address" style={styles.input} returnKeyType="next" accessibilityLabel="Email address" />
               {renderPassword('Password', password, setPassword, showPassword, setShowPassword)}
               {renderPassword('Confirm password', confirmPassword, setConfirmPassword, showConfirmPassword, setShowConfirmPassword, true)}
-              <Text style={[styles.label, styles.optionalLabel]}>Workspace details <Text style={styles.optionalText}>· optional</Text></Text>
-              <TextInput placeholder="Organization" placeholderTextColor="#718096" value={organization} onChangeText={setOrganization} style={styles.input} returnKeyType="next" accessibilityLabel="Organization, optional" />
-              <View style={styles.optionalRow}>
-                <TextInput placeholder="Industry" placeholderTextColor="#718096" value={industry} onChangeText={setIndustry} style={[styles.input, styles.optionalInput]} accessibilityLabel="Industry, optional" />
-                <TextInput placeholder="Country" placeholderTextColor="#718096" value={country} onChangeText={setCountry} style={[styles.input, styles.optionalInput]} accessibilityLabel="Country, optional" />
-              </View>
+              <Text style={styles.label}>Asal Instansi</Text>
+              <TextInput placeholder="Enter your institution" placeholderTextColor="#718096" value={aslInstansi} onChangeText={setAsalInstansi} style={styles.input} returnKeyType="next" accessibilityLabel="Asal Instansi" />
             </View>
 
             <TouchableOpacity style={styles.termsRow} onPress={() => setTermsAccepted((accepted) => !accepted)} accessibilityRole="checkbox" accessibilityState={{ checked: termsAccepted }}>

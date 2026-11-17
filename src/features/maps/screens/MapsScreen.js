@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { Linking, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View, useWindowDimensions } from 'react-native';
-import { FontAwesomeIcon } from '@fortawesome/react-native-fontawesome';
+import { FontAwesomeIcon } from '../../../shared/components/Icon';
 import { faChartLine, faCircleExclamation, faEraser, faLeaf, faMapLocationDot, faRandom, faTowerBroadcast } from '@fortawesome/free-solid-svg-icons';
 import ResponsiveContent from '../../../shared/components/ResponsiveContent';
 import CityScene from '../components/CityScene';

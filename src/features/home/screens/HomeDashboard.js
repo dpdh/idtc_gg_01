@@ -1,14 +1,18 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Animated, Easing, Image, PixelRatio, Platform, Pressable, ScrollView, StyleSheet, Text, TouchableOpacity, View, useWindowDimensions } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { FontAwesomeIcon } from '@fortawesome/react-native-fontawesome';
+import { FontAwesomeIcon } from '../../../shared/components/Icon';
 import { faBell, faChevronLeft, faChevronRight, faCube, faGamepad, faHandPointer, faWandMagicSparkles } from '@fortawesome/free-solid-svg-icons';
-import TwiniHeroBackground from '../components/TwiniHeroBackground';
 import HeroBackdrop from '../components/HeroBackdrop';
 import { useAuth } from '../../auth/data/AuthContext';
 import glbModels from '../../library/data/glbModels';
 import { glbSourceFor } from '../../viewer/utils/glbSource';
 import useReducedMotion from '../../../shared/hooks/useReducedMotion';
+
+// The hero character is a WebGL scene (three.js + GLTF loader). Loading it through React.lazy keeps
+// those modules out of the launch path: the dashboard paints instantly and the 3D engine arrives on
+// demand, only for this screen.
+const TwiniHeroBackground = React.lazy(() => import('../components/TwiniHeroBackground'));
 
 const TWINI_FALLBACK = require('../../../assets/imageTwini/Meshy_AI_Twiny Engineer High-Res Render_no.webp');
 const TAB_BAR_SPACE = 104; // floating bottom tab bar (see AppNavigator) + breathing room
@@ -168,8 +172,12 @@ const HomeDashboard = ({ navigation }) => {
           <HeroBackdrop height={heroSize?.height || 700} stage={stage} reduceMotion={reduceMotion} />
           {/* One WebGL canvas for character + bubbles; it never takes touches (the stage Pressable does). */}
           <View pointerEvents="none" style={StyleSheet.absoluteFill}>
-            {heroSize ? <TwiniHeroBackground source={source} stage={stage} greetSignal={greetSignal} reduceMotion={reduceMotion} lowEnd={LOW_END}
-              onReady={onReady} onError={() => setFailed(true)} lookRef={lookRef} impulseRef={impulseRef} /> : null}
+            {heroSize ? (
+              <React.Suspense fallback={null}>
+                <TwiniHeroBackground source={source} stage={stage} greetSignal={greetSignal} reduceMotion={reduceMotion} lowEnd={LOW_END}
+                  onReady={onReady} onError={() => setFailed(true)} lookRef={lookRef} impulseRef={impulseRef} />
+              </React.Suspense>
+            ) : null}
           </View>
           <View pointerEvents="none" style={styles.heroBorderGlow} />
 

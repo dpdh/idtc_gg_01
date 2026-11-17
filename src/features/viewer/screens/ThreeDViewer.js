@@ -11,10 +11,11 @@ import {
 import { Canvas, OrbitControls, useAnimations, useGLTF, getGLTFSource } from '../components/ThreeDRenderer';
 import { glbSourceFor } from '../utils/glbSource';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { FontAwesomeIcon } from '@fortawesome/react-native-fontawesome';
+import { FontAwesomeIcon } from '../../../shared/components/Icon';
 import { faArrowLeft, faRotate } from '@fortawesome/free-solid-svg-icons';
 import { getGLTFFrame } from '../utils/glbBounds';
 import glbModels from '../../library/data/glbModels';
+import useAppActive from '../../../shared/hooks/useAppActive';
 
 class ModelErrorBoundary extends React.Component {
   state = { hasError: false };
@@ -35,20 +36,35 @@ class ModelErrorBoundary extends React.Component {
 
 function GlbModel({ source, uri, onReady }) {
   const group = useRef(null);
-  const { scene, animations } = useGLTF(getGLTFSource(source, uri));
+  const { scene, animations } = useGLTF(getGLTFSource(source, uri), { throttle: 16 });
   const modelFrame = React.useMemo(() => getGLTFFrame(scene), [scene]);
   const { actions } = useAnimations(animations, group);
 
   useEffect(() => { onReady(); }, [onReady, scene]);
 
   useEffect(() => {
+    if (!animations) return;
     const availableActions = Object.values(actions).filter((action) => action && typeof action.reset === 'function');
     const firstAnimation = availableActions[0];
-    firstAnimation?.reset();
-    firstAnimation?.fadeIn?.(0.3);
-    firstAnimation?.play?.();
+    if (firstAnimation) {
+      firstAnimation?.reset();
+      firstAnimation?.fadeIn?.(0.3);
+      firstAnimation?.play?.();
+    }
     return () => availableActions.forEach((action) => action.fadeOut?.(0.2));
-  }, [actions]);
+  }, [actions, animations]);
+
+  // Cleanup on unmount to prevent memory leaks
+  useEffect(() => {
+    return () => {
+      if (animations) {
+        Object.values(animations).forEach((action) => {
+          if (action?.fadeOut) action.fadeOut(0.2);
+          if (action?.stop) action.stop();
+        });
+      }
+    };
+  }, []);
 
   return <group ref={group} scale={modelFrame.scale}>
     <group position={modelFrame.center.map((value) => -value)}><primitive object={scene} /></group>
@@ -93,11 +109,14 @@ export default function ThreeDViewer({ navigation, route }) {
     return () => { active = false; };
   }, [model]);
 
+  const appActive = useAppActive();
+
   return (
     <View style={styles.screen}>
       <StatusBar hidden backgroundColor="#090f1b" />
       <Canvas
         style={StyleSheet.absoluteFill}
+        frameloop={appActive ? 'always' : 'never'}
         camera={{
           position: [0, 0, 4.5],
           fov: 42,
@@ -105,7 +124,7 @@ export default function ThreeDViewer({ navigation, route }) {
           far: 100,
         }}
         dpr={[1, 1.5]}
-        gl={{ antialias: true, alpha: false, powerPreference: 'high-performance' }}
+        gl={{ antialias: true, stencil: false, alpha: false, powerPreference: 'high-performance' }}
       >
         <color attach="background" args={['#090f1b']} />
         <ambientLight intensity={1.3} />

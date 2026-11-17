@@ -11,7 +11,7 @@ const SAVE_PREFIX = '@twini/game/v1/';
 const MISSION_CACHE = '@twini/missions-cache/v1';
 const FLUSH_INTERVAL = 30000;
 
-export default function useTwinGame({ userKey = 'guest', onMissionComplete, onNotice } = {}) {
+export default function useTwinGame({ userKey = 'guest', onMissionComplete, onNotice, onEvent } = {}) {
   const [ready, setReady] = useState(false);
   const [missions, setMissions] = useState(content.missions);
   const [assets, setAssets] = useState(content.assets);
@@ -28,7 +28,7 @@ export default function useTwinGame({ userKey = 'guest', onMissionComplete, onNo
   const [tick, setTick] = useState(0);
 
   const refs = useRef({});
-  refs.current = { missions, missionState, objectState, pendingClaims, pendingDiscoveries, localAssets, session, profile, onMissionComplete, onNotice };
+  refs.current = { missions, missionState, objectState, pendingClaims, pendingDiscoveries, localAssets, session, profile, onMissionComplete, onNotice, onEvent };
   const extraRef = useRef(null);
   const flushing = useRef(false);
 
@@ -190,6 +190,8 @@ export default function useTwinGame({ userKey = 'guest', onMissionComplete, onNo
       setMissionState(state);
     }
     if (completed.length) queueClaims(completed, state);
+    // Co-op hook: the game screen forwards the same event to its multiplayer room.
+    refs.current.onEvent?.(event);
     return completed;
   }, []);
 

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Modal, Platform, ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Image, Modal, Platform, ScrollView, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import glbModels from '../../library/data/glbModels';
 import { gameApi, getBaseUrl, setBaseUrl } from '../services/gameApi';
 import { Button, C, Pill, ProgressBar, RARITY_COLOR, RARITY_LABEL, REDEMPTION_LABEL, Segmented, formatNumber, ui } from './gameUi';
@@ -40,6 +40,7 @@ function StoreSection({ twin, goAccount }) {
   const [delivery, setDelivery] = useState({ name: '', phone: '', address: '' });
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState(null);
+  const [filter, setFilter] = useState('all');
 
   const load = useCallback(async () => {
     try {
@@ -58,8 +59,18 @@ function StoreSection({ twin, goAccount }) {
     } catch (e) { setError(e.message); } finally { setBusy(false); }
   };
 
+  const counts = { all: products?.length || 0, digital: products?.filter((p) => p.category === 'digital').length || 0, merch: products?.filter((p) => p.category === 'merch').length || 0 };
   return <View>
-    <Text style={[ui.body, { marginBottom: 8 }]}>Saldo: <Text style={{ color: C.gold, fontWeight: '900' }}>{formatNumber(twin.wallet.balance)} TP</Text>. Setiap penukaran diproses dan dipotong oleh server.</Text>
+    {/* Rewards hero: balance + Twini */}
+    <View style={[ui.card, { flexDirection: 'row', alignItems: 'center', gap: 12, borderColor: `${C.gold}66`, backgroundColor: 'rgba(242,196,95,0.08)' }]}>
+      <Image source={require('../../../assets/splash/twini_mechanical.jpg')} style={{ width: 74, height: 74, borderRadius: 37, borderWidth: 2, borderColor: C.gold }} />
+      <View style={{ flex: 1 }}>
+        <Text style={ui.eyebrow}>TWINI REWARDS</Text>
+        <Text style={{ color: C.gold, fontSize: 26, fontWeight: '900' }}>{formatNumber(twin.wallet.balance)} <Text style={{ fontSize: 14 }}>TP</Text></Text>
+        <Text style={ui.small}>Tukar Twin Points jadi voucher hadiah & merchandise Twini. Semua penukaran divalidasi server.</Text>
+      </View>
+    </View>
+    <View style={{ marginBottom: 8 }}><Segmented value={filter} onChange={setFilter} options={[['all', `Semua (${counts.all})`], ['digital', `Voucher (${counts.digital})`], ['merch', `Merchandise (${counts.merch})`]]} /></View>
     {error && !selected ? <Text style={ui.error}>{error}</Text> : null}
     {result ? <View style={[ui.card, { borderColor: `${C.green}66` }]}>
       <Text style={ui.title}>Penukaran berhasil · {result.reference}</Text>
@@ -68,7 +79,7 @@ function StoreSection({ twin, goAccount }) {
       {result.status === 'PENDING' ? <Text style={ui.small}>Penukaran sedang direview admin sebelum diproses.</Text> : null}
       <View style={{ marginTop: 8 }}><Button label="Tutup" kind="ghost" small onPress={() => setResult(null)} /></View>
     </View> : null}
-    {!products ? <ActivityIndicator color={C.cyan} /> : ['digital', 'merch'].map((cat) => <View key={cat}>
+    {!products ? <ActivityIndicator color={C.cyan} /> : ['digital', 'merch'].filter((cat) => filter === 'all' || filter === cat).map((cat) => <View key={cat}>
       <Text style={[ui.eyebrow, { marginVertical: 8 }]}>{cat === 'digital' ? 'HADIAH DIGITAL' : 'MERCHANDISE FISIK'}</Text>
       {products.filter((p) => p.category === cat).map((p) => {
         const owned = redemptions.filter((r) => r.productId === p.id && r.status !== 'CANCELLED').length;
@@ -80,6 +91,7 @@ function StoreSection({ twin, goAccount }) {
             <Text style={[ui.title, { fontSize: 14 }]}>{p.name}</Text>
             <Text style={ui.small}>{p.description} · Stok {formatNumber(p.stock)} · Limit {owned}/{p.redemptionLimit}</Text>
             <Text style={{ color: C.gold, fontWeight: '900', marginTop: 2 }}>{formatNumber(p.priceTp)} TP</Text>
+            {twin.session && !canAfford ? <View style={{ marginTop: 4 }}><ProgressBar ratio={Math.min(1, twin.wallet.balance / p.priceTp)} color={C.gold} /><Text style={[ui.small, { marginTop: 2 }]}>Kurang {formatNumber(p.priceTp - twin.wallet.balance)} TP · selesaikan misi untuk menambah poin</Text></View> : null}
           </View>
           <Button small label={p.availability === 'out_of_stock' ? 'Habis' : owned >= p.redemptionLimit ? 'Limit' : twin.session && !canAfford ? 'TP kurang' : 'Tukar'} disabled={!available || (twin.session && !canAfford)}
             onPress={() => (twin.session ? (setSelected(p), setError(null)) : goAccount())} />

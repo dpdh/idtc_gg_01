@@ -23,6 +23,7 @@ Aplikasi mendukung platform **iOS, Android, dan Web** melalui kemampuan cross-pl
 - [Smart City Planner](#smart-city-planner)
 - [TWINI Survival Game](#twini-survival-game)
 - [Autentikasi & Manajemen Pengguna](#autentikasi--manajemen-pengguna)
+- [Keamanan & Performa APK](#keamanan--performa-apk)
 - [Kontribusi](#kontribusi)
 - [Lisensi](#lisensi)
 - [Acknowledgments](#acknowledgments)
@@ -862,6 +863,64 @@ Game digital twin gamifikasi yang berlatar di **Monas (Monumen Nasional, Jakarta
 - Sistem badge pencapaian
 - Leveling berdasarkan XP yang terkumpul
 
+### Wabah Digital & Pertumbuhan Kota
+- **Skenario pencarian wabah**: 5 jenis wabah digital (Fantom Data, Simpul Glitch, Wabah Alga,
+  Gerombolan Emisi, Virus Kernel) di 16 titik pencarian pada 8 zona
+- **Penanggulangan dengan tembakan Twini**: pelontar plasma mengunci otomatis wabah terdekat;
+  setiap tembakan mengurangi HP, wabah hancur memberi XP, koin, energi, dan Poin Pertumbuhan Kota
+- **Pertumbuhan kota**: 8 petak bidang tanah dan 8 aset bangunan (Taman Ekologi, Hub Sensor,
+  Kanopi Surya, Taman Air, Pertanian Vertikal, Pos Sehat, Twin Tower, Hub Transit)
+- **Bangunan tampil di scene 3D** pada koordinat petak, dengan indeks pertumbuhan kota (ekosistem,
+  energi, data, kesehatan) dan level 1–5
+- **Misi mingguan baru**: `Wabah Digital Ekosistem` (8 wabah) dan `Pertumbuhan Kota Hijau`
+  (3 aset kota) dengan reward Twin Points yang divalidasi server
+
+Detail lengkap: [`docs/WABAH_DAN_PERTUMBUHAN_KOTA.md`](docs/WABAH_DAN_PERTUMBUHAN_KOTA.md)
+
+### Multiplayer Co-op, Disiplin & Papan Peringkat
+- **Join bareng tim**: buat ruangan untuk satu misi, bagikan kode 6 karakter, progres objektif
+  semua anggota digabung di server, reward TP/XP diklaim sekali per anggota (idempoten)
+- **11 disiplin karakter** dengan efek nyata: Civil Engineer, Geodesi, Urban Planning, Data Science,
+  Arsitek, Planologi, IT, Professor, Ahli Kesehatan, Ahli Lingkungan, dan TNI
+- **Papan peringkat**: kontribusi co-op per pemain/disiplin + peringkat Twin Points
+- **Kendaraan detail**: mobil, motor, dan kapal kini punya sparepart lengkap (roof rack, panniers,
+  cleat, lampu kabut, plat nomor, dsb.) tanpa menambah draw call
+- **Monas & pelataran**: pelataran lebar tanpa railing (13,4×13,4) dengan tangga di 4 sisi yang
+  benar-benar bisa dipijak, panel relief, lampu sorot, tiang bendera, dan bollard
+
+Detail: [`docs/MULTIPLAYER_DAN_DISIPLIN.md`](docs/MULTIPLAYER_DAN_DISIPLIN.md)
+
+### Start Point, Toko Senjata, Upgrade & Warga
+- **Start point tetap**: setiap tekan *Mulai Eksplorasi* Twini selalu muncul di gerbang start
+  environment (cincin hijau + beacon `StartPointMarker`), kendaraan diturunkan, sel amunisi diisi ulang
+- **5 pistol laser** yang lebih detail (rel, scope, grip, heat-sink, energy cell, muzzle brake; tier 3+
+  twin barrel, tier 5 claw muzzle): Pulse, Ion Blaster, Plasma Magnum, Quantum Repeater, Nova Cannon
+- **Toko & Upgrade** (menu atau ketuk chip TP/koin di HUD): beli/ganti senjata, 5 aksesori senjata,
+  3 upgrade aset kota, 3 upgrade kendaraan, serta tukar koin menjadi Poin Pertumbuhan Kota
+- **Warga (NPC)** di environment: 4 karakter berkostum khas (helm proyek + rompi high-vis, topi
+  surveyor + papan peta, jas dokter + stetoskop, baret TNI + senapan) yang menghadap Twini dan bisa
+  diajak bicara lewat INTERACT (dialog bertahap, petunjuk, dan hadiah koin/XP sekali klaim)
+- **Distrik Toko fisik** di utara-timur Monas (di luar jalan lingkar): Toko TWINI, Bengkel Laser,
+  Garasi Kendaraan, Gudang Aset Kota, dan Pos Layanan berjejer rapi di satu pelataran dengan trotoar,
+  6 lampu, planter, dan gapura; INTERACT di pintu membuka tab toko yang sesuai
+
+Detail: [`docs/TOKO_SENJATA_DAN_WARGA.md`](docs/TOKO_SENJATA_DAN_WARGA.md)
+
+### Wilayah Pengembangan & Atribut Karakter
+- **18 petak wilayah**: 12 petak darat di 3 kawasan (Selatan, Utara, Timur) dan 6 petak laut di
+  2 marina yang mengapung di kiri-kanan dermaga Pesisir Digital — semua bebas dari jalan/bangunan OSM,
+  objek misi, sebaran wabah, distrik toko, dan pelataran Monas
+- **Beli petak dengan koin**, lalu bangun **rumah tinggal, perkantoran, industri, atau rekreasi**
+  (4 kategori × petak darat/laut = 8 bangunan) memakai Poin Pertumbuhan Kota
+- **Nilai Wilayah & pendapatan**: setiap bangunan menambah nilai, populasi, lapangan kerja, ekosistem,
+  kebahagiaan, serta pendapatan koin + poin per menit yang menumpuk maksimal 3 jam lalu diklaim
+- **Atribut karakter per disiplin & profil per karakter**: 11 disiplin × (topi, pakaian, sepatu,
+  aksesori/lencana) + 2 item emas premium, dengan **profil terpisah untuk 5 karakter Twini** dan
+  **toggle pakai/tidak per slot**; model aksesori detail (ventilasi helm, lapel jas, tali sepatu,
+  lencana berpelat) dan skalanya mengikuti proporsi tiap model karakter
+
+Detail: [`docs/WILAYAH_DAN_ATRIBUT.md`](docs/WILAYAH_DAN_ATRIBUT.md)
+
 ---
 
 ## Autentikasi & Manajemen Pengguna
@@ -881,6 +940,37 @@ Game digital twin gamifikasi yang berlatar di **Monas (Monumen Nasional, Jakarta
 ### Alur Autentikasi
 ```
 Splash → Onboarding → Login/Register → Home Dashboard (dengan Bottom Tab)
+```
+
+---
+
+## Keamanan & Performa APK
+
+Build Android TWINI sudah di-hardening untuk distribusi:
+
+- **Tanpa rahasia di bundle**: akun demo hanya di-seed pada build `__DEV__` dari
+  `EXPO_PUBLIC_SEED_ADMIN_EMAIL` / `EXPO_PUBLIC_SEED_ADMIN_PASSWORD` (lihat `.env.example`), dan
+  kunci Meshy hanya ada di server sebagai `MESHY_API_KEY`.
+- **Penyimpanan aman**: password lokal, token cloud, dan ID sesi disimpan di `expo-secure-store`
+  (Android Keystore / iOS Keychain), bukan di `AsyncStorage`.
+- **Manifest minimal**: hanya `INTERNET` dan `VIBRATE`; `allowBackup=false`, `usesCleartextTraffic=false`,
+  `network_security_config` yang hanya memercayai CA sistem, plus `dataExtractionRules` /
+  `fullBackupContent` sehingga data aplikasi tidak bisa dicadangkan atau dipindah ke perangkat lain.
+- **Log rilis bersih**: R8 membuang `Log.v/d/i` dan menyamarkan nama file sumber, jadi logcat tidak
+  membocorkan state internal sementara stack trace tetap bisa dibuka lewat `mapping.txt`.
+- **Baterai & frame**: semua canvas 3D berhenti merender saat aplikasi di background (`frameloop`
+  mengikuti `AppState`), resolusi render adaptif (low-end 1× piksel), dan MSAA dimatikan untuk scene
+  survival di Android.
+- **APK ringan & cepat**: R8 + resource shrinking, Hermes, satu APK per ABI, decoder GIF dimatikan,
+  serta code splitting (`React.lazy`) dan deep import `@react-three/drei` agar three.js tidak
+  di-parse saat cold start.
+
+Panduan lengkap (perintah build rilis, verifikasi `apksigner`/`aapt2`, dan checklist rilis) ada di
+[`docs/SECURITY_AND_PERFORMANCE.md`](docs/SECURITY_AND_PERFORMANCE.md).
+
+```bash
+cd android
+gradlew.bat assembleRelease     # Windows; output: app/build/outputs/apk/release/
 ```
 
 ---

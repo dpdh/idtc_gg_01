@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, useWindowDimensions } from 'react-native';
-import { FontAwesomeIcon } from '@fortawesome/react-native-fontawesome';
+import { FontAwesomeIcon } from '../../../shared/components/Icon';
 import { faPlus, faTrash, faClone, faCircleCheck } from '@fortawesome/free-solid-svg-icons';
 import ResponsiveContent from '../../../shared/components/ResponsiveContent';
 import initialProjects from '../data/initialProjects';

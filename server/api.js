@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const game = require('./game');
+const coop = require('./coop');
 const worldContent = require('../src/features/game/data/gameContent.json');
 
 const { ApiError } = game;
@@ -64,6 +65,16 @@ function createApi(db) {
     return game.login(db, body);
   });
   route('POST', '/auth/logout', (ctx) => { game.logout(db, ctx.token); return { ok: true }; }, { auth: 'user' });
+  route('GET', '/auth/config', () => ({ google: game.googleConfig() }));
+  route('POST', '/auth/google', async (ctx) => {
+    rateLimit(`google:${ctx.ip}`, 20, 60_000);
+    return game.googleLogin(db, await readJson(ctx.req));
+  });
+  route('PATCH', '/auth/me', async (ctx) => game.updateMe(db, ctx.user, await readJson(ctx.req)), { auth: 'user' });
+  route('POST', '/auth/password', async (ctx) => {
+    rateLimit(`password:${ctx.user.id}`, 6, 600_000);
+    return game.changePassword(db, ctx.user, await readJson(ctx.req));
+  }, { auth: 'user' });
   route('GET', '/auth/me', (ctx) => ({ user: game.publicUser(ctx.user) }), { auth: 'user' });
 
   // ----- public content -----
@@ -85,6 +96,16 @@ function createApi(db) {
     return [201, game.redeem(db, ctx.user, await readJson(ctx.req))];
   }, { auth: 'user' });
   route('GET', '/store/redemptions', (ctx) => ({ redemptions: game.listRedemptions(db, ctx.user.id) }), { auth: 'user' });
+
+  // ----- co-op multiplayer (join bareng) -----
+  route('POST', '/coop/rooms', async (ctx) => [201, coop.createRoom(db, ctx.user, await readJson(ctx.req))], { auth: 'user' });
+  route('GET', '/coop/rooms/mine', (ctx) => ({ rooms: coop.myRooms(db, ctx.user) }), { auth: 'user' });
+  route('GET', '/coop/leaderboard', (ctx) => ({ leaderboard: coop.coopLeaderboard(db, Number(ctx.query.get('limit')) || 20) }), { auth: 'user' });
+  route('POST', '/coop/rooms/:code/join', async (ctx) => coop.joinRoom(db, ctx.user, ctx.params.code, await readJson(ctx.req)), { auth: 'user' });
+  route('POST', '/coop/rooms/:code/progress', async (ctx) => coop.reportProgress(db, ctx.user, ctx.params.code, await readJson(ctx.req)), { auth: 'user' });
+  route('POST', '/coop/rooms/:code/claim', (ctx) => coop.claimRoom(db, ctx.user, ctx.params.code), { auth: 'user' });
+  route('POST', '/coop/rooms/:code/leave', (ctx) => coop.leaveRoom(db, ctx.user, ctx.params.code), { auth: 'user' });
+  route('GET', '/coop/rooms/:code', (ctx) => coop.getRoom(db, ctx.user, ctx.params.code), { auth: 'user' });
 
   // ----- admin (role-based) -----
   const admin = { auth: 'admin' };
@@ -142,7 +163,11 @@ function createApi(db) {
   route('GET', '/admin/vouchers/validate', (ctx) => game.validateVoucher(db, ctx.query.get('code')), admin);
   route('GET', '/admin/redemptions', () => ({ redemptions: game.listRedemptions(db, null) }), admin);
   route('POST', '/admin/redemptions/:id/status', async (ctx) => game.updateRedemptionStatus(db, ctx.user, ctx.params.id, (await readJson(ctx.req)).status), admin);
-  route('GET', '/admin/players', () => ({ players: game.adminPlayers(db) }), admin);
+  route('GET', '/admin/players', (ctx) => ({ players: game.adminPlayers(db, { q: ctx.query.get('q'), role: ctx.query.get('role'), status: ctx.query.get('status'), provider: ctx.query.get('provider') }) }), admin);
+  route('POST', '/admin/players', async (ctx) => [201, game.adminCreateUser(db, ctx.user, await readJson(ctx.req))], admin);
+  route('GET', '/admin/players/:id', (ctx) => game.adminPlayerDetail(db, ctx.params.id), admin);
+  route('POST', '/admin/players/:id/revoke-sessions', (ctx) => game.adminRevokeSessions(db, ctx.user, ctx.params.id), admin);
+  route('DELETE', '/admin/players/:id', (ctx) => game.adminDeleteUser(db, ctx.user, ctx.params.id), admin);
   route('PATCH', '/admin/players/:id', async (ctx) => game.adminUpdatePlayer(db, ctx.user, ctx.params.id, await readJson(ctx.req)), admin);
   route('POST', '/admin/players/:id/points', async (ctx) => {
     const body = await readJson(ctx.req);

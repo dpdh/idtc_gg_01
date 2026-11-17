@@ -1,5 +1,10 @@
+// Deep imports keep the Android/Hermes bundle small: `@react-three/drei/native` re-exports ~100
+// components (troika text, camera-controls, meshline, ...) and Metro does not tree-shake, so importing
+// the barrel added ~3.6 MB of JS to every cold start (measured: 9.74 MB -> 6.15 MB bundle).
 export { Canvas, useFrame, useLoader, useThree } from '@react-three/fiber/native';
-export { OrbitControls, useAnimations, useGLTF } from '@react-three/drei/native';
+export { OrbitControls } from '@react-three/drei/core/OrbitControls';
+export { useAnimations } from '@react-three/drei/core/useAnimations';
+export { useGLTF } from '@react-three/drei/core/Gltf';
 
 export const getGLTFSource = (_source, uri) => uri;
 

@@ -39,6 +39,13 @@
   .panel { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px; margin-bottom:14px; }
   .msg { padding:8px 12px; border-radius:8px; margin:8px 0; font-size:13px; } .msg.err { background:#3a1520; color:#ffc1cb; } .msg.ok { background:#10301f; color:#b6f5d2; }
   .login { max-width:360px; margin:12vh auto; } .muted { color:var(--muted); }
+  .filters { display:grid; grid-template-columns:2fr 1fr 1fr 1fr auto; gap:8px; align-items:end; margin-bottom:12px; }
+  .user { display:flex; gap:10px; align-items:center; } .avatar { width:32px; height:32px; border-radius:50%; background:var(--panel2); display:flex; align-items:center; justify-content:center; font-weight:700; color:var(--cyan); overflow:hidden; flex-shrink:0; }
+  .avatar img { width:100%; height:100%; object-fit:cover; }
+  .pill.google { color:#8ab4ff; } .pill.password { color:var(--muted); } .pill.admin { color:var(--gold); }
+  .drawer { position:fixed; top:0; right:0; bottom:0; width:min(560px,100%); background:#0b1424; border-left:1px solid var(--line); padding:18px; overflow:auto; z-index:5; box-shadow:-20px 0 40px rgba(0,0,0,.4); }
+  .actions button { margin:2px 2px 2px 0; }
+  @media (max-width:760px) { .filters { grid-template-columns:1fr 1fr; } }
   @media (max-width:760px) { .layout { flex-direction:column; } nav { width:auto; display:flex; overflow-x:auto; border-right:0; border-bottom:1px solid var(--line); } nav button { white-space:nowrap; width:auto; } }
 </style>
 </head>
@@ -92,7 +99,7 @@ function renderLogin(error) {
 const TABS = [
   ['overview', 'Dashboard Overview'], ['world', 'World & Map'], ['assets', 'Digital Twin Assets'], ['missions', 'Mission Management'],
   ['characters', 'Characters & NPC'], ['products', 'Rewards & Merchandise'], ['vouchers', 'Voucher Management'], ['redemptions', 'Redemptions'],
-  ['players', 'Player Management'], ['transactions', 'Twin Points & Fraud'], ['leaderboard', 'Leaderboard'], ['events', 'Event Management'],
+  ['players', 'User Management'], ['transactions', 'Twin Points & Fraud'], ['leaderboard', 'Leaderboard'], ['events', 'Event Management'],
   ['config', 'Game Configuration'], ['audit', 'Audit Log'],
 ];
 
@@ -110,6 +117,28 @@ async function render() {
   const view = document.getElementById('view');
   if (!view) return;
   try { view.innerHTML = await VIEWS[state.tab](); bind[state.tab]?.(); } catch (e) { view.innerHTML = `<div class="msg err">${esc(e.message)}</div>`; }
+}
+
+async function openUser(id) {
+  const box = document.getElementById('drawer');
+  if (!box) return;
+  try {
+    const d = await api('GET', `/admin/players/${encodeURIComponent(id)}`);
+    const u = d.user;
+    box.innerHTML = `<div class="drawer"><div class="row" style="justify-content:space-between;margin-top:0"><h2>${esc(u.fullName)}</h2><button class="btn ghost" id="dclose">Tutup</button></div>
+      <p class="sub">${esc(u.email)} · ${esc(u.id)}<br>Metode: ${esc(u.provider)} · Role: ${esc(u.role)} · Status: ${esc(u.status)}${u.statusReason ? ` (${esc(u.statusReason)})` : ''}<br>Dibuat ${date(u.createdAt)} · Login terakhir ${date(u.lastLoginAt)}</p>
+      <div class="cards"><div class="card"><div class="v">${fmt(d.stats.balance)}</div><div class="l">Saldo TP</div></div><div class="card"><div class="v">${fmt(d.stats.lifetimeEarned)}</div><div class="l">Total TP diperoleh</div></div>
+        <div class="card"><div class="v">${fmt(d.stats.missionsCompleted)}</div><div class="l">Klaim misi</div></div><div class="card"><div class="v">${fmt(d.stats.activeSessions)}</div><div class="l">Sesi aktif</div></div></div>
+      <form id="dname" class="row"><input name="fullName" value="${esc(u.fullName)}" style="max-width:260px"><button class="btn ghost">Simpan nama</button></form>
+      <div class="row"><button class="btn ghost" id="drevoke">Cabut semua sesi</button><button class="btn danger" id="ddelete">Hapus akun</button></div>
+      <h3>Transaksi Twin Points</h3>${table(['Waktu', 'Tipe', 'Sumber', 'Jumlah'], d.transactions.map((t) => `<tr><td>${date(t.createdAt)}</td><td>${esc(t.type)}</td><td>${esc(t.source)}</td><td style="color:${t.amount > 0 ? 'var(--green)' : 'var(--red)'}">${t.amount > 0 ? '+' : ''}${fmt(t.amount)}</td></tr>`))}
+      <h3>Penukaran hadiah</h3>${table(['Ref', 'Produk', 'TP', 'Status'], d.redemptions.map((r) => `<tr><td>${esc(r.reference)}</td><td>${esc(r.productIcon || '')} ${esc(r.productName)}</td><td>${fmt(r.priceTp)}</td><td><span class="pill ${esc(r.status)}">${esc(r.status)}</span></td></tr>`))}
+      <h3>Riwayat admin</h3>${table(['Waktu', 'Aksi', 'Detail'], d.audit.map((a) => `<tr><td>${date(a.created_at)}</td><td>${esc(a.action)}</td><td>${esc(a.detail)}</td></tr>`))}</div>`;
+    document.getElementById('dclose').onclick = () => { box.innerHTML = ''; };
+    document.getElementById('dname').onsubmit = (e) => { e.preventDefault(); act(() => api('PATCH', `/admin/players/${encodeURIComponent(id)}`, { fullName: new FormData(e.target).get('fullName') }), 'Nama diperbarui.'); };
+    document.getElementById('drevoke').onclick = () => act(() => api('POST', `/admin/players/${encodeURIComponent(id)}/revoke-sessions`), 'Semua sesi dicabut.');
+    document.getElementById('ddelete').onclick = () => { if (confirm('Hapus akun ini? Data pribadi dihapus, riwayat poin tetap untuk audit. Tidak bisa dibatalkan.')) act(() => api('DELETE', `/admin/players/${encodeURIComponent(id)}`), 'Akun dihapus.'); };
+  } catch (e) { flash(e.message, false); }
 }
 
 const table = (head, rows) => `<div class="tablewrap"><table><thead><tr>${head.map((h) => `<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.join('') || `<tr><td colspan="${head.length}" class="muted">Belum ada data.</td></tr>`}</tbody></table></div>`;
@@ -182,13 +211,48 @@ const VIEWS = {
         <td>${(next[r.status] || []).map((s) => `<button class="btn ${s === 'CANCELLED' ? 'danger' : 'ghost'}" data-rs="${esc(r.id)}" data-status="${s}">${s}</button>`).join(' ')}</td></tr>`))}`;
   },
   async players() {
-    const { players } = await api('GET', '/admin/players');
-    return `<h2>Player Management</h2><p class="sub">Ubah role, bekukan akun, atau sesuaikan Twin Points (tercatat di audit log).</p>
-      ${table(['Nama', 'Email', 'Role', 'Status', 'XP', 'TP', 'Flag', 'Aksi'], players.map((p) => `<tr><td>${esc(p.fullName)}</td><td>${esc(p.email)}</td><td>${esc(p.role)}</td><td><span class="pill ${esc(p.status)}">${esc(p.status)}</span></td>
-        <td>${fmt(p.xp)}</td><td>${fmt(p.twinPoints)}</td><td>${p.openFlags || ''}</td><td>
-        <button class="btn ghost" data-role="${esc(p.id)}" data-value="${p.role === 'admin' ? 'player' : 'admin'}">${p.role === 'admin' ? 'Jadikan player' : 'Jadikan admin'}</button>
-        <button class="btn ${p.status === 'active' ? 'danger' : 'ghost'}" data-ban="${esc(p.id)}" data-value="${p.status === 'active' ? 'banned' : 'active'}">${p.status === 'active' ? 'Bekukan' : 'Aktifkan'}</button>
-        <button class="btn ghost" data-adjust="${esc(p.id)}">± TP</button></td></tr>`))}`;
+    const f = state.userFilter || (state.userFilter = { q: '', role: '', status: '', provider: '' });
+    const qs = new URLSearchParams(Object.entries(f).filter(([, v]) => v)).toString();
+    const { players } = await api('GET', `/admin/players${qs ? `?${qs}` : ''}`);
+    state.players = players;
+    const total = players.length;
+    const google = players.filter((p) => String(p.provider).includes('google')).length;
+    const banned = players.filter((p) => p.status === 'banned').length;
+    const online = players.filter((p) => p.activeSessions > 0).length;
+    const initials = (n) => esc(String(n || '?').split(/\s+/).map((w) => w[0]).slice(0, 2).join('').toUpperCase());
+    return `<h2>User Management</h2><p class="sub">Cari, filter, lihat detail, buat akun, ubah role, bekukan dengan alasan, cabut sesi, sesuaikan Twin Points, atau hapus akun. Semua aksi tercatat di audit log.</p>
+      <div class="cards">
+        <div class="card"><div class="v">${fmt(total)}</div><div class="l">User (hasil filter)</div></div>
+        <div class="card"><div class="v">${fmt(google)}</div><div class="l">Login dengan Google</div></div>
+        <div class="card"><div class="v">${fmt(online)}</div><div class="l">Punya sesi aktif</div></div>
+        <div class="card"><div class="v">${fmt(banned)}</div><div class="l">Dibekukan</div></div>
+      </div>
+      <form id="uf" class="filters">
+        <div><label>Cari nama / email / ID</label><input name="q" value="${esc(f.q)}" placeholder="mis. budi@gmail.com"></div>
+        <div><label>Role</label><select name="role"><option value="">Semua</option><option value="player" ${f.role === 'player' ? 'selected' : ''}>Player</option><option value="admin" ${f.role === 'admin' ? 'selected' : ''}>Admin</option></select></div>
+        <div><label>Status</label><select name="status"><option value="">Semua</option><option value="active" ${f.status === 'active' ? 'selected' : ''}>Aktif</option><option value="banned" ${f.status === 'banned' ? 'selected' : ''}>Dibekukan</option></select></div>
+        <div><label>Metode login</label><select name="provider"><option value="">Semua</option><option value="google" ${f.provider === 'google' ? 'selected' : ''}>Google</option><option value="password" ${f.provider === 'password' ? 'selected' : ''}>Email & password</option></select></div>
+        <div class="row" style="margin:0"><button class="btn">Terapkan</button><button class="btn ghost" type="button" id="ucsv">CSV</button></div>
+      </form>
+      <details class="panel"><summary style="cursor:pointer;font-weight:700">+ Buat user baru</summary>
+        <form id="unew" class="grid2" style="margin-top:8px">
+          <div><label>Nama lengkap</label><input name="fullName" required></div>
+          <div><label>Email</label><input name="email" type="email" required></div>
+          <div><label>Password awal (min 8)</label><input name="password" type="password" minlength="8" required></div>
+          <div><label>Role</label><select name="role"><option value="player">Player</option><option value="admin">Admin</option></select></div>
+          <div class="row"><button class="btn">Buat akun</button></div>
+        </form></details>
+      ${table(['User', 'Metode', 'Role', 'Status', 'TP', 'XP', 'Login terakhir', 'Aksi'], players.map((p) => `<tr>
+        <td><div class="user"><div class="avatar">${p.avatarUrl ? `<img src="${esc(p.avatarUrl)}" alt="" referrerpolicy="no-referrer">` : initials(p.fullName)}</div><div><b>${esc(p.fullName)}</b><div class="muted">${esc(p.email)}</div></div></div></td>
+        <td><span class="pill ${String(p.provider).includes('google') ? 'google' : 'password'}">${String(p.provider).includes('google') ? 'Google' : 'Email'}</span></td>
+        <td><span class="pill ${esc(p.role)}">${esc(p.role)}</span></td>
+        <td><span class="pill ${esc(p.status)}">${p.status === 'active' ? 'aktif' : 'dibekukan'}</span>${p.statusReason ? `<div class="muted">${esc(p.statusReason)}</div>` : ''}${p.openFlags ? `<div style="color:var(--red)">⚑ ${p.openFlags} flag</div>` : ''}</td>
+        <td>${fmt(p.twinPoints)}</td><td>${fmt(p.xp)}</td><td>${date(p.lastLoginAt)}${p.activeSessions ? `<div class="muted">${p.activeSessions} sesi aktif</div>` : ''}</td>
+        <td class="actions"><button class="btn ghost" data-detail="${esc(p.id)}">Detail</button>
+          <button class="btn ghost" data-role="${esc(p.id)}" data-value="${p.role === 'admin' ? 'player' : 'admin'}">${p.role === 'admin' ? '→ Player' : '→ Admin'}</button>
+          <button class="btn ${p.status === 'active' ? 'danger' : 'ghost'}" data-ban="${esc(p.id)}" data-value="${p.status === 'active' ? 'banned' : 'active'}">${p.status === 'active' ? 'Bekukan' : 'Aktifkan'}</button>
+          <button class="btn ghost" data-adjust="${esc(p.id)}">± TP</button></td></tr>`))}
+      <div id="drawer"></div>`;
   },
   async transactions() {
     const { transactions, flags } = await api('GET', '/admin/transactions');
@@ -322,13 +386,24 @@ const bind = {
     });
   },
   players() {
-    document.querySelectorAll('[data-role]').forEach((b) => b.onclick = () => act(() => api('PATCH', `/admin/players/${b.dataset.role}`, { role: b.dataset.value }), 'Role diperbarui.'));
-    document.querySelectorAll('[data-ban]').forEach((b) => b.onclick = () => { if (confirm('Ubah status akun ini?')) act(() => api('PATCH', `/admin/players/${b.dataset.ban}`, { status: b.dataset.value }), 'Status diperbarui.'); });
+    document.getElementById('uf').onsubmit = (e) => { e.preventDefault(); state.userFilter = Object.fromEntries(new FormData(e.target).entries()); render(); };
+    document.getElementById('unew').onsubmit = (e) => { e.preventDefault(); const body = Object.fromEntries(new FormData(e.target).entries()); act(() => api('POST', '/admin/players', body), `Akun ${body.email} dibuat.`); };
+    document.getElementById('ucsv').onclick = () => {
+      const rows = [['id', 'nama', 'email', 'metode', 'role', 'status', 'twin_points', 'xp', 'dibuat', 'login_terakhir'], ...state.players.map((p) => [p.id, p.fullName, p.email, p.provider, p.role, p.status, p.twinPoints, p.xp, p.createdAt, p.lastLoginAt || ''])];
+      const csv = rows.map((r) => r.map((v) => `"${String(v ?? '').replace(/"/g, '""')}"`).join(',')).join('\n');
+      const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' })); a.download = 'twini-users.csv'; a.click();
+    };
+    document.querySelectorAll('[data-role]').forEach((b) => b.onclick = () => { if (confirm(`Ubah role menjadi ${b.dataset.value}?`)) act(() => api('PATCH', `/admin/players/${b.dataset.role}`, { role: b.dataset.value }), 'Role diperbarui.'); });
+    document.querySelectorAll('[data-ban]').forEach((b) => b.onclick = () => {
+      if (b.dataset.value === 'banned') { const reason = prompt('Alasan pembekuan (ditampilkan ke user saat login):'); if (reason === null) return; act(() => api('PATCH', `/admin/players/${b.dataset.ban}`, { status: 'banned', reason }), 'Akun dibekukan & semua sesi dicabut.'); }
+      else if (confirm('Aktifkan kembali akun ini?')) act(() => api('PATCH', `/admin/players/${b.dataset.ban}`, { status: 'active' }), 'Akun diaktifkan.');
+    });
     document.querySelectorAll('[data-adjust]').forEach((b) => b.onclick = () => {
       const amount = prompt('Jumlah TP (negatif untuk mengurangi):'); if (!amount) return;
       const reason = prompt('Alasan penyesuaian:'); if (!reason) return;
       act(() => api('POST', `/admin/players/${b.dataset.adjust}/points`, { amount: Number(amount), reason }), 'Twin Points disesuaikan.');
     });
+    document.querySelectorAll('[data-detail]').forEach((b) => b.onclick = () => openUser(b.dataset.detail));
   },
   transactions() { document.querySelectorAll('[data-resolve]').forEach((b) => b.onclick = () => act(() => api('POST', `/admin/fraud/${b.dataset.resolve}/resolve`), 'Flag diselesaikan.')); },
   config() {

@@ -11,7 +11,7 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from 'react-native';
-import { FontAwesomeIcon } from '@fortawesome/react-native-fontawesome';
+import { FontAwesomeIcon } from '../../../shared/components/Icon';
 import { faUser, faCog, faMessage, faDownload, faFilter, faArrowLeft, faCompass } from '@fortawesome/free-solid-svg-icons';
 import ResponsiveContent from '../../../shared/components/ResponsiveContent';
 import { useAuth } from '../../auth/data/AuthContext';

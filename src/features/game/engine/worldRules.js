@@ -24,11 +24,11 @@ export const safeZoneAt = (position) => SAFE_ZONES.find((zone) => dist(position,
  * Nearest object the player can use right now.
  * objectState[id] = { scanned, done, synced, lastUsed }
  */
-export function nearestInteractable(position, objectState, now = Date.now()) {
+export function nearestInteractable(position, objectState, now = Date.now(), radius = INTERACT_RADIUS) {
   let best = null;
   for (const object of WORLD_OBJECTS) {
     const d = dist(position, object.position);
-    if (d > INTERACT_RADIUS || (best && d >= best.distance)) continue;
+    if (d > radius || (best && d >= best.distance)) continue;
     const type = OBJECT_TYPES[object.type];
     const state = objectState[object.id] || {};
     if (['activate', 'identify', 'rescue', 'challenge', 'treasure'].includes(type.action) && state.done) continue;
@@ -49,13 +49,13 @@ export const clamp = (value) => Math.max(0, Math.min(100, value));
  * Per-second survival update for the new indicators.
  * stats: { health, hydration, connection, supply }
  */
-export function tickSurvival(stats, { running = false, moving = false, zone = null, safe = false, storm = false, dtSec = 1 }) {
+export function tickSurvival(stats, { running = false, moving = false, zone = null, safe = false, storm = false, dtSec = 1, healBonus = 0 }) {
   let { health, hydration, connection } = stats;
   hydration -= (0.06 + (moving ? 0.04 : 0) + (running ? 0.08 : 0) + (storm ? 0.05 : 0)) * dtSec;
   if (hydration <= 0) health -= 0.5 * dtSec;
   if (storm && !safe) health -= 0.45 * dtSec;
   if (zone?.hazard && !safe) health -= 0.3 * dtSec;
-  if (safe) health += 0.6 * dtSec;
+  if (safe) health += 0.6 * (1 + Math.max(0, Number(healBonus) || 0)) * dtSec;
   if (zone?.interference) connection -= 1.4 * dtSec;
   else if (!storm) connection += 0.12 * dtSec;
   else connection -= 0.2 * dtSec;

@@ -1,6 +1,6 @@
 import React from 'react';
 import { Linking, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { FontAwesomeIcon } from '@fortawesome/react-native-fontawesome';
+import { FontAwesomeIcon } from '../../../shared/components/Icon';
 import { faMapLocationDot } from '@fortawesome/free-solid-svg-icons';
 
 const MAP_URL = 'https://www.openstreetmap.org/#map=14/-6.208/106.816';

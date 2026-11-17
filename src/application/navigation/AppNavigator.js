@@ -1,4 +1,5 @@
-import React, { useState, useCallback } from 'react';
+import React, { Suspense, useState, useCallback } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   StyleSheet,
   View,
@@ -9,18 +10,25 @@ import {
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import HomeDashboard from '../../features/home/screens/HomeDashboard';
 import ThreeDCategories from '../../features/categories/screens/ThreeDCategories';
-import MapsScreen from '../../features/maps/screens/MapsScreen';
 import SimulationScreen from '../../features/simulation/screens/SimulationScreen';
 import UserProfile from '../../features/profile/screens/UserProfile';
 import OnboardingScreen from '../../features/onboarding/screens/OnboardingScreen';
+import TwiniSplash from '../../features/splash/screens/TwiniSplash';
 import LoginScreen from '../../features/auth/screens/LoginScreen';
 import RegisterScreen from '../../features/auth/screens/RegisterScreen';
 import ThreeDLibrary from '../../features/library/screens/ThreeDLibrary';
-import ThreeDViewer from '../../features/viewer/screens/ThreeDViewer';
 import MeshyGeneratorScreen from '../../features/meshy/screens/MeshyGeneratorScreen';
-import TwiniSurvivalScreen from '../../features/survival/screens/TwiniSurvivalScreen';
 import AppErrorBoundary from '../components/AppErrorBoundary';
 import { useAuth } from '../../features/auth/data/AuthContext';
+
+// Screens that pull in the 3D engine (three.js, react-three-fiber, GLB loaders) are code-split with
+// React.lazy so a cold start only parses the splash/login/home code. Metro evaluates an `import()`
+// module on first use instead of at startup, which is where most of the launch time used to go.
+const TwiniSurvivalScreen = React.lazy(() => import('../../features/survival/screens/TwiniSurvivalScreen'));
+const MapsScreen = React.lazy(() => import('../../features/maps/screens/MapsScreen'));
+const ThreeDViewer = React.lazy(() => import('../../features/viewer/screens/ThreeDViewer'));
+
+const ONBOARDED_KEY = '@twini/onboarded/v1';
 
 const SCREENS = {
   SPLASH: 'SPLASH',
@@ -82,7 +90,7 @@ function BottomTabBar({ tab, onTabPress }) {
   );
 }
 export default function AppNavigator() {
-  const [screen, setScreen] = useState(SCREENS.MAIN);
+  const [screen, setScreen] = useState(SCREENS.SPLASH);
   const [tab, setTab] = useState('Home');
   const [bottomNavigationVisible, setBottomNavigationVisible] = useState(true);
   const [viewerParams, setViewerParams] = useState(null);
@@ -139,10 +147,18 @@ export default function AppNavigator() {
   const showTabBar =
     screen === SCREENS.MAIN || screen === SCREENS.LIBRARY || screen === SCREENS.VIEWER;
 
-  if (!isReady) {
+  // Animated Twini splash (3 s) → onboarding on first launch → main tabs.
+  const finishSplash = useCallback(async () => {
+    let onboarded = false;
+    try { onboarded = (await AsyncStorage.getItem(ONBOARDED_KEY)) === '1'; } catch { onboarded = false; }
+    setScreen(onboarded ? SCREENS.MAIN : SCREENS.ONBOARDING);
+  }, []);
+  const markOnboarded = useCallback(() => { AsyncStorage.setItem(ONBOARDED_KEY, '1').catch(() => {}); }, []);
+
+  if (screen === SCREENS.SPLASH || !isReady) {
     return (
       <SafeAreaProvider style={styles.appBackground}>
-        <View style={styles.loadingScreen}><Text style={styles.loadingText}>TWINI</Text></View>
+        <TwiniSplash onDone={() => { if (isReady) finishSplash(); else setTimeout(finishSplash, 400); }} />
       </SafeAreaProvider>
     );
   }
@@ -150,50 +166,52 @@ export default function AppNavigator() {
   return (
     <AppErrorBoundary>
       <SafeAreaProvider style={styles.appBackground}>
-        {screen === SCREENS.SPLASH && null}
-        {screen === SCREENS.ONBOARDING && (
-          <OnboardingScreen
-            navigation={{ navigate, goBack }}
-            route={{ params: {} }}
-          />
-        )}
-        {screen === SCREENS.LOGIN && (
-          <LoginScreen
-            navigation={{ navigate, goBack }}
-            route={{ params: {} }}
-          />
-        )}
-        {screen === SCREENS.REGISTER && (
-          <RegisterScreen
-            navigation={{ navigate, goBack }}
-            route={{ params: {} }}
-          />
-        )}
-        {screen === SCREENS.MAIN && renderTabScreen()}
-        {screen === SCREENS.LIBRARY && (
-          <ThreeDLibrary
-            navigation={{ navigate, goBack }}
-            route={{ params: {} }}
-          />
-        )}
-        {screen === SCREENS.VIEWER && viewerParams && (
-          <ThreeDViewer
-            navigation={{ navigate, goBack }}
-            route={{ params: viewerParams }}
-          />
-        )}
-        {screen === SCREENS.MESHY_GENERATOR && (
-          <MeshyGeneratorScreen
-            navigation={{ navigate, goBack }}
-            route={{ params: {} }}
-          />
-        )}
-        {screen === SCREENS.CITY_BUILDER && (
-          <MapsScreen
-            navigation={{ navigate, goBack }}
-            route={{ params: {} }}
-          />
-        )}
+        <Suspense fallback={<View style={styles.loadingScreen}><Text style={styles.loadingText}>MEMUAT…</Text></View>}>
+          {screen === SCREENS.ONBOARDING && (
+            <OnboardingScreen
+              onFinish={markOnboarded}
+              navigation={{ navigate, goBack }}
+              route={{ params: {} }}
+            />
+          )}
+          {screen === SCREENS.LOGIN && (
+            <LoginScreen
+              navigation={{ navigate, goBack }}
+              route={{ params: {} }}
+            />
+          )}
+          {screen === SCREENS.REGISTER && (
+            <RegisterScreen
+              navigation={{ navigate, goBack }}
+              route={{ params: {} }}
+            />
+          )}
+          {screen === SCREENS.MAIN && renderTabScreen()}
+          {screen === SCREENS.LIBRARY && (
+            <ThreeDLibrary
+              navigation={{ navigate, goBack }}
+              route={{ params: {} }}
+            />
+          )}
+          {screen === SCREENS.VIEWER && viewerParams && (
+            <ThreeDViewer
+              navigation={{ navigate, goBack }}
+              route={{ params: viewerParams }}
+            />
+          )}
+          {screen === SCREENS.MESHY_GENERATOR && (
+            <MeshyGeneratorScreen
+              navigation={{ navigate, goBack }}
+              route={{ params: {} }}
+            />
+          )}
+          {screen === SCREENS.CITY_BUILDER && (
+            <MapsScreen
+              navigation={{ navigate, goBack }}
+              route={{ params: {} }}
+            />
+          )}
+        </Suspense>
         {showTabBar && bottomNavigationVisible && <BottomTabBar tab={tab} onTabPress={handleTabPress} />}
       </SafeAreaProvider>
     </AppErrorBoundary>

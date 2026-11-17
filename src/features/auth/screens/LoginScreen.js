@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuth } from '../data/AuthContext';
+import GoogleSignInButton from '../components/GoogleSignInButton';
 
 export default function LoginScreen({ navigation }) {
   const [email, setEmail] = useState('');
@@ -104,6 +105,10 @@ export default function LoginScreen({ navigation }) {
             >
               <Text style={styles.primaryButtonText}>{isLoading ? 'Signing in…' : 'Sign in'}</Text>
             </TouchableOpacity>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginVertical: 14 }}>
+              <View style={{ flex: 1, height: 1, backgroundColor: 'rgba(160,190,220,0.25)' }} /><Text style={{ color: '#8ea6c1', fontSize: 12 }}>atau</Text><View style={{ flex: 1, height: 1, backgroundColor: 'rgba(160,190,220,0.25)' }} />
+            </View>
+            <GoogleSignInButton label="Masuk dengan Google" onSignedIn={() => navigation.navigate('Main')} onError={(message) => setError(message)} />
             <View style={styles.footer}>
               <Text style={styles.footerText}>New to TWINI? </Text>
               <TouchableOpacity onPress={() => navigation.navigate('Register')} accessibilityRole="link">

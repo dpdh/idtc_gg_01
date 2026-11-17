@@ -38,6 +38,15 @@ export async function cloudRegister(email, password, fullName) {
   return session;
 }
 
+// Google Sign-In: the server verifies the Google ID token and returns a normal game session.
+export async function cloudGoogleSignIn(idToken) {
+  const result = await gameApi.googleLogin(idToken);
+  const session = { token: result.token, user: result.user };
+  await saveSession(session);
+  notify(session);
+  return session;
+}
+
 export async function cloudSignOut() {
   const session = await loadSession();
   if (session?.token) gameApi.logout(session.token).catch(() => {});

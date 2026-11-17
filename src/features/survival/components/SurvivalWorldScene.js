@@ -1,14 +1,35 @@
 import React, { Suspense, useEffect, useMemo, useRef, useState } from 'react';
-import { Platform, StyleSheet } from 'react-native';
+import { Platform, PixelRatio, StyleSheet } from 'react-native';
 import { Canvas, OrbitControls, quietExpoGL, useAnimations, useFrame, useGLTF, useThree } from '../../viewer/components/ThreeDRenderer';
 import * as THREE from 'three';
 import { SkeletonUtils } from 'three-stdlib';
+import useAppActive from '../../../shared/hooks/useAppActive';
 import { getGLTFFrame } from '../../viewer/utils/glbBounds';
 import { glbSourceFor } from '../../viewer/utils/glbSource';
 import { MONAS_MAP_DATA } from '../data/monasMap';
+import { environmentById } from '../data/environments';
+import EnvironmentScene, { AmbientSky } from './EnvironmentScenes';
+import MonasTower, { MONAS_FLAME_CENTER } from './MonasTower';
+import { MONAS_WALK_Y, MONAS_TOWER_HALF, monasRaisedHeight } from '../data/monasTerrace';
+import { WorldObjectMarker, ZoneRings } from './SensorMarkers';
+import { SHORE_R, WADE_R, WATER_LEVEL, beachHeight, isOpenWater, oceanHeight, onPier } from './Ocean';
+import { VEHICLE_TYPES, VehiclesLayer, seatOf, spawnVehicles, stepVehicle } from './Vehicles';
+import { CombatLayer, TeleportFx } from './Combat';
+import WabahLayer from './WabahLayer';
+import CityGrowthLayer from './CityGrowthLayer';
+import NpcLayer from './NpcLayer';
+import DistrictLayer from './DistrictLayer';
+import CharacterCosmetics from './CharacterCosmetics';
+import { resolveFit } from '../data/characterFits';
+import ShopDistrictLayer from './ShopDistrictLayer';
+import { startPointFor } from '../data/startPoints';
+import { insideShopDistrict } from '../data/shopDistrict';
+import { FollowSun, REALISTIC_LIGHTING, SkyEnvironment, groundMaterial } from './Materials';
+import TreeInstances from './Trees';
+import FlowerInstances from './Flowers';
 // Kept outside the Monas tower footprint (±5.6) so every item stays reachable.
 // Twini at half the old size (~1.2 units) so the 30-unit Monas reads at a more realistic scale.
-export const CHARACTER_SCALE = 0.5;
+export const CHARACTER_SCALE = 0.38; // compact Twini (~0.9 units) so the world and Monas read bigger
 // Locomotion (units / second). Movement is integrated inside the render loop from a shared control ref,
 // so walking is frame-synced and never waits for a React re-render.
 export const WALK_SPEED = 2.6;
@@ -96,7 +117,8 @@ const KAWASAN_HALF = 6012 * KAWASAN_SCALE; // half-width of the model footprint 
 const KAWASAN_OFFSET = [22.3 * KAWASAN_SCALE, -146.8 * KAWASAN_SCALE];
 const insideKawasan = (x, z, margin = 0) => Math.abs(x) <= KAWASAN_HALF + margin && Math.abs(z) <= KAWASAN_HALF + margin;
 // Solid tower footprint (game units) — the player cannot walk through it.
-export const MONAS_TOWER_HALF = 5.8;
+// Ketinggian & tabrakan pelataran Monas berasal dari data/monasTerrace.js (juga diuji unit test).
+export { MONAS_TOWER_HALF };
 // The Monas podium is a raised square (top 0.92) with steps between 9.3 and 10.4 from the centre.
 const PODIUM_TOP = 0.92;
 const PODIUM_INNER = 9.3;
@@ -187,7 +209,7 @@ function MonasKawasanModel({ uri, onReady, onScene }) {
 }
 
 // Golden flame shimmer: a pulsing soft halo plus twinkling star sparkles drifting around the tip.
-const FLAME_CENTER = [0, 27.9, 0];
+const FLAME_CENTER = MONAS_FLAME_CENTER;
 function GoldenFlameSparkle() {
   const halo = useRef(null);
   const points = useRef(null);
@@ -355,7 +377,7 @@ function MonasMapNetwork({ kawasanReady }) {
   return <>
     {MONAS_MAP_DATA.roads.map((road) => <MapRoad key={road.id} road={road} isCleared={isCleared} />)}
     {MONAS_MAP_DATA.buildings
-      .filter((building) => !isCleared(building.x, building.z))
+      .filter((building) => !isCleared(building.x, building.z) && !insideShopDistrict(building.x, building.z, 1.5))
       .map((building) => <MapBuilding key={building.id} building={building} />)}
   </>;
 }
@@ -405,7 +427,8 @@ function findRestPoseTime(clip, root) {
   return bestTime;
 }
 
-function TwiniGlbAvatar({ uri, position, movementDirection, moving, running, jumping, groundY = 0, groundRef, emoteSignal = 0, controlRef }) {
+function TwiniGlbAvatar({ uri, cosmetics, characterId, position, movementDirection, moving: movingProp, running: runningProp, jumping, groundY = 0, groundRef, emoteSignal = 0, controlRef }) {
+  const { moving, running } = useLiveMotion(controlRef, movingProp, runningProp);
   const group = useRef(null);
   const turn = useRef(null);
   const yaw = useRef(null);
@@ -413,7 +436,11 @@ function TwiniGlbAvatar({ uri, position, movementDirection, moving, running, jum
   const activeState = useRef('idle');
   const spin = useRef(null);
   const { scene, animations } = useGLTF(uri);
-  const clonedScene = useMemo(() => SkeletonUtils.clone(scene), [scene]);
+  const clonedScene = useMemo(() => {
+    const clone = SkeletonUtils.clone(scene);
+    clone.traverse((child) => { if (child.isMesh) { child.castShadow = true; child.frustumCulled = false; } });
+    return clone;
+  }, [scene]);
   const { actions } = useAnimations(animations, clonedScene);
   const availableActions = Object.entries(actions).filter(([, action]) => action && typeof action.reset === 'function');
   // Try patterns in priority order so e.g. "Hello_Run" is never picked as idle and "Running" wins over "Female_Run_...".
@@ -494,6 +521,8 @@ function TwiniGlbAvatar({ uri, position, movementDirection, moving, running, jum
   // because bind-pose bounds don't match the standing pose and left the feet sunk into the ground.
   const avatarScale = modelFrame.scale * CHARACTER_SCALE;
   const originY = -avatarScale * (modelFrame.min[1] - modelFrame.center[1]);
+  // Proporsi aksesori mengikuti bentuk model karakter ini (kepala/bahu/tebal badan hasil ukur).
+  const avatarFit = useMemo(() => resolveFit(characterId, modelFrame), [characterId, modelFrame]);
   const footFix = useRef(0);
   const shownGround = useRef(null);
   const frames = useRef(0);
@@ -503,6 +532,17 @@ function TwiniGlbAvatar({ uri, position, movementDirection, moving, running, jum
     if (!group.current) return;
     const dt = Math.min(delta || 1 / 60, 0.05);
     const live = controlRef?.current;
+    // Riding: sit on the vehicle seat, follow its heading and lean (motorbike lean, boat roll).
+    const seat = live?.vehicle ? live.seat : null;
+    if (seat) {
+      group.current.position.set(seat.x, seat.y + footFix.current, seat.z);
+      yaw.current = seat.yaw;
+      if (turn.current) turn.current.rotation.set(0, seat.yaw, seat.roll);
+      if (spin.current) spin.current.rotation.y = 0;
+      shownGround.current = seat.y;
+      return;
+    }
+    if (turn.current && turn.current.rotation.z) turn.current.rotation.z = 0;
     group.current.position.x = live ? live.pos[0] : position[0];
     group.current.position.z = live ? live.pos[1] : position[1];
     // Smooth turn toward the walking direction (no snapping when the stick changes direction).
@@ -553,12 +593,21 @@ function TwiniGlbAvatar({ uri, position, movementDirection, moving, running, jum
             <primitive object={clonedScene} />
           </group>
         </group>
+        {/* Atribut disiplin (topi/pakaian/sepatu/lencana) diskalakan balik agar memakai unit dunia. */}
+        <group scale={avatarScale > 0 ? 1 / avatarScale : 1}>
+          <CharacterCosmetics
+            cosmetics={cosmetics}
+            fit={avatarFit}
+            height={(modelFrame.size ? modelFrame.size[1] : 2.35) * avatarScale}
+          />
+        </group>
       </group>
     </group>
   );
 }
 
-function TwiniFallbackAvatar({ position, movementDirection, moving, running, jumping, groundY = 0, groundRef, controlRef }) {
+function TwiniFallbackAvatar({ cosmetics, position, movementDirection, moving: movingProp, running: runningProp, jumping, groundY = 0, groundRef, controlRef }) {
+  const { moving, running } = useLiveMotion(controlRef, movingProp, runningProp);
   const group = useRef(null);
   const leftArm = useRef(null);
   const rightArm = useRef(null);
@@ -568,10 +617,13 @@ function TwiniFallbackAvatar({ position, movementDirection, moving, running, jum
     const phase = clock.elapsedTime * (running ? 11 : 8);
     if (group.current) group.current.position.y = (groundRef?.current ?? groundY) + (jumping ? 0.65 : 0) + (moving ? Math.abs(Math.sin(phase)) * 0.08 : Math.sin(phase) * 0.025);
     const live = controlRef?.current;
-    if (group.current && live) {
+    if (group.current && live?.vehicle && live.seat) {
+      group.current.position.set(live.seat.x, live.seat.y, live.seat.z);
+      group.current.rotation.set(0, live.seat.yaw, live.seat.roll);
+    } else if (group.current && live) {
       group.current.position.x = live.pos[0];
       group.current.position.z = live.pos[1];
-      group.current.rotation.y = Math.atan2(live.facing.dx || 0, live.facing.dz ?? 1);
+      group.current.rotation.set(0, Math.atan2(live.facing.dx || 0, live.facing.dz ?? 1), 0);
     }
     if (leftArm.current) leftArm.current.rotation.x = moving ? Math.sin(phase) * 0.68 : Math.sin(phase) * 0.08;
     if (rightArm.current) rightArm.current.rotation.x = moving ? -Math.sin(phase) * 0.68 : -Math.sin(phase) * 0.08;
@@ -584,6 +636,8 @@ function TwiniFallbackAvatar({ position, movementDirection, moving, running, jum
   const facingAngle = Math.atan2(movementDirection.dx, movementDirection.dz);
 
   return <group ref={group} position={[position[0], 0, position[1]]} rotation={[0, facingAngle, 0]} scale={0.75 * CHARACTER_SCALE}>
+    {/* Atribut disiplin mengikuti tubuh fallback (tinggi ±1,83 unit lokal). */}
+    <CharacterCosmetics cosmetics={cosmetics} height={1.83} />
     {/* Compact IDTC digital guardian: helmet, glowing face, armored body and gold circuit accents. */}
     <mesh position={[0, 0.42, 0]} castShadow><sphereGeometry args={[0.23, 18, 14]} /><meshStandardMaterial color={blue} roughness={0.38} metalness={0.35} /></mesh>
     <mesh position={[0, 0.47, 0.15]} castShadow><boxGeometry args={[0.3, 0.14, 0.12]} /><meshStandardMaterial color={white} roughness={0.42} metalness={0.28} /></mesh>
@@ -642,99 +696,21 @@ function TwiniFallbackAvatar({ position, movementDirection, moving, running, jum
   </group>;
 }
 
-function TwiniAvatar({ character, ...props }) {
+function TwiniAvatar({ character, cosmetics, characterId, ...props }) {
   const [uri, setUri] = useState(null);
 
   useEffect(() => {
     setUri(glbSourceFor(character?.source || require('../../../assets/glb/mobile/twini.glb')));
   }, [character?.id, character?.source]);
 
-  if (!uri) return <TwiniFallbackAvatar {...props} />;
-  return <Suspense fallback={<TwiniFallbackAvatar {...props} />}>
-    <AvatarModelBoundary key={uri} fallback={<TwiniFallbackAvatar {...props} />}>
-      <TwiniGlbAvatar {...props} uri={uri} />
+  if (!uri) return <TwiniFallbackAvatar {...props} cosmetics={cosmetics} />;
+  return <Suspense fallback={<TwiniFallbackAvatar {...props} cosmetics={cosmetics} />}>
+    <AvatarModelBoundary key={uri} fallback={<TwiniFallbackAvatar {...props} cosmetics={cosmetics} />}>
+      <TwiniGlbAvatar {...props} cosmetics={cosmetics} characterId={characterId} uri={uri} />
     </AvatarModelBoundary>
   </Suspense>;
 }
 
-
-// Low-poly markers for the interactive Digital Twin objects (no per-object lights: cheap on mobile GPUs).
-const WorldObjectMarker = React.memo(function WorldObjectMarker({ object, state = {}, highlighted, groundY }) {
-  const spin = useRef(null);
-  useFrame(({ clock }) => {
-    if (spin.current) spin.current.rotation.y = clock.elapsedTime * 1.2;
-  });
-  const ok = state.done || state.synced || state.repaired || state.restored;
-  const t = object.type;
-  const glow = ok ? '#4fe39a' : object.color;
-  const ring = highlighted ? <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.03, 0]}><ringGeometry args={[0.85, 1.05, 64]} /><meshBasicMaterial color="#5fd3ff" transparent opacity={0.85} /></mesh> : null;
-  let body = null;
-  if (t === 'iot_sensor') body = <>
-    <mesh position={[0, 0.72, 0]}><cylinderGeometry args={[0.045, 0.06, 1.44, 24]} /><meshStandardMaterial color="#c9d6e2" metalness={0.85} roughness={0.2} /></mesh>
-    <mesh position={[0, 1.48, 0]}><sphereGeometry args={[0.18, 24, 18]} /><meshStandardMaterial color={ok ? '#6ef0a9' : '#b898ff'} emissive={ok ? '#20d974' : '#8965e4'} emissiveIntensity={0.9} /></mesh>
-  </>;
-  else if (t === 'street_light') body = <>
-    <mesh position={[0, 1.4, 0]}><cylinderGeometry args={[0.05, 0.07, 2.8, 24]} /><meshStandardMaterial color="#2b3a4c" metalness={0.85} roughness={0.22} /></mesh>
-    <mesh position={[0, 2.85, 0]}><boxGeometry args={[0.5, 0.12, 0.22]} /><meshStandardMaterial color="#fff6d0" emissive={ok ? '#ffe9a6' : '#3a3420'} emissiveIntensity={ok ? 1.4 : 0.3} /></mesh>
-  </>;
-  else if (t === 'cctv') body = <>
-    <mesh position={[0, 1.2, 0]}><cylinderGeometry args={[0.05, 0.06, 2.4, 24]} /><meshStandardMaterial color="#2b3a4c" metalness={0.85} roughness={0.22} /></mesh>
-    <mesh position={[0.15, 2.35, 0]}><boxGeometry args={[0.36, 0.18, 0.18]} /><meshStandardMaterial color="#e3e9ee" emissive={glow} emissiveIntensity={0.25} /></mesh>
-  </>;
-  else if (t === 'drainage') body = <>
-    <mesh position={[0, 0.06, 0]}><boxGeometry args={[1.6, 0.12, 0.7]} /><meshStandardMaterial color="#5a6670" /></mesh>
-    <mesh position={[0, 0.14, 0]}><boxGeometry args={[1.4, 0.04, 0.5]} /><meshStandardMaterial color={ok ? '#3fb6ff' : '#6b5a3c'} emissive={ok ? '#1a8fd6' : '#000000'} emissiveIntensity={0.5} /></mesh>
-  </>;
-  else if (t === 'energy_station') body = <>
-    <mesh position={[0, 0.7, 0]}><boxGeometry args={[1.0, 1.4, 0.7]} /><meshStandardMaterial color="#1c2b40" metalness={0.8} roughness={0.2} /></mesh>
-    <mesh position={[0, 1.1, 0.36]}><boxGeometry args={[0.6, 0.3, 0.02]} /><meshStandardMaterial color={glow} emissive={glow} emissiveIntensity={ok ? 1.2 : 0.4} /></mesh>
-  </>;
-  else if (t === 'solar_panel') body = <>
-    <mesh position={[0, 0.5, 0]}><cylinderGeometry args={[0.05, 0.05, 1, 24]} /><meshStandardMaterial color="#2b3a4c" metalness={0.85} roughness={0.22} /></mesh>
-    <mesh position={[0, 1.0, 0]} rotation={[-0.5, 0, 0]}><boxGeometry args={[1.6, 0.05, 0.9]} /><meshStandardMaterial color="#1d3d78" metalness={0.7} roughness={0.25} emissive={ok ? '#2a6dff' : '#000000'} emissiveIntensity={0.3} /></mesh>
-  </>;
-  else if (t === 'smart_building') body = <mesh position={[0, 1.6, 0]}><boxGeometry args={[2.2, 3.2, 2.2]} /><meshStandardMaterial color="#8fa7c4" metalness={0.5} roughness={0.3} emissive={glow} emissiveIntensity={ok ? 0.35 : 0.08} /></mesh>;
-  else if (t === 'weather_station' || t === 'air_quality' || t === 'public_facility') body = <>
-    <mesh position={[0, 0.6, 0]}><boxGeometry args={[0.5, 1.2, 0.5]} /><meshStandardMaterial color="#e9f1f7" metalness={0.35} roughness={0.18} /></mesh>
-    <group ref={spin} position={[0, 1.35, 0]}><mesh><boxGeometry args={[0.7, 0.05, 0.08]} /><meshStandardMaterial color={glow} emissive={glow} emissiveIntensity={0.6} /></mesh></group>
-  </>;
-  else if (t === 'pollution') body = ok ? <mesh position={[0, 0.05, 0]} rotation={[-Math.PI / 2, 0, 0]}><circleGeometry args={[0.7, 16]} /><meshBasicMaterial color="#4fe39a" transparent opacity={0.4} /></mesh> : <>
-    <mesh position={[0, 0.25, 0]}><dodecahedronGeometry args={[0.45, 0]} /><meshStandardMaterial color="#6e5a43" roughness={1} /></mesh>
-    <mesh position={[0, 1.0, 0]}><sphereGeometry args={[0.5, 24, 18]} /><meshStandardMaterial color="#5b5048" transparent opacity={0.45} /></mesh>
-  </>;
-  else if (t === 'npc') body = ok ? null : <>
-    <mesh position={[0, 0.55, 0]}><capsuleGeometry args={[0.22, 0.6, 8, 20]} /><meshStandardMaterial color="#ffa26b" /></mesh>
-    <mesh position={[0, 1.15, 0]}><sphereGeometry args={[0.2, 24, 18]} /><meshStandardMaterial color="#f1c7a0" /></mesh>
-    <group ref={spin} position={[0, 1.65, 0]}><mesh><octahedronGeometry args={[0.14, 0]} /><meshStandardMaterial color="#ffd36e" emissive="#ffb62e" emissiveIntensity={1} /></mesh></group>
-  </>;
-  else if (t === 'infra_challenge') body = <>
-    <mesh position={[0, 0.75, 0]}><boxGeometry args={[0.7, 1.5, 0.4]} /><meshStandardMaterial color="#1d1a33" metalness={0.75} roughness={0.2} /></mesh>
-    <mesh position={[0, 1.05, 0.21]}><boxGeometry args={[0.55, 0.5, 0.02]} /><meshStandardMaterial color={ok ? '#4fe39a' : '#ff6bd5'} emissive={ok ? '#20d974' : '#d6309f'} emissiveIntensity={0.9} /></mesh>
-  </>;
-  else if (t === 'hydration') body = <>
-    <mesh position={[0, 0.5, 0]}><cylinderGeometry args={[0.3, 0.35, 1.0, 24]} /><meshStandardMaterial color="#e3eef6" metalness={0.4} roughness={0.15} /></mesh>
-    <mesh position={[0, 1.08, 0]}><sphereGeometry args={[0.18, 24, 18]} /><meshStandardMaterial color="#5ec8ff" emissive="#2b9fe0" emissiveIntensity={0.7} transparent opacity={0.9} /></mesh>
-  </>;
-  else if (t === 'supply_crate') body = <mesh position={[0, 0.35, 0]}><boxGeometry args={[0.7, 0.7, 0.7]} /><meshStandardMaterial color="#c08a40" metalness={0.55} roughness={0.3} emissive="#ffb04a" emissiveIntensity={0.08} /></mesh>;
-  else if (t === 'treasure') body = ok ? null : <group ref={spin} position={[0, 0.7, 0]}><mesh><icosahedronGeometry args={[0.35, 0]} /><meshStandardMaterial color="#ffd700" emissive="#ffb000" emissiveIntensity={1.1} metalness={0.8} roughness={0.2} /></mesh></group>;
-  else if (t === 'landmark_core') body = <group ref={spin} position={[0, 1.4, 0]}><mesh><torusGeometry args={[0.55, 0.05, 16, 64]} /><meshStandardMaterial color={ok ? '#4fe39a' : '#f2c45f'} emissive={ok ? '#20d974' : '#d69a2e'} emissiveIntensity={1} /></mesh></group>;
-  return <group position={[object.position[0], groundY, object.position[1]]}><HoloPad color={glow} active={highlighted} />{ring}{body}</group>;
-});
-
-// Futuristic hex pad: dark glass base, neon rim and a slowly rotating scanner ring (shared look for all objects).
-function HoloPad({ color, active }) {
-  const ring = useRef(null);
-  useFrame(({ clock }) => {
-    if (!ring.current) return;
-    ring.current.rotation.z = clock.elapsedTime * (active ? 1.6 : 0.6);
-    ring.current.material.opacity = (active ? 0.75 : 0.42) + Math.sin(clock.elapsedTime * 2.4) * 0.12;
-  });
-  return <group>
-    <mesh position={[0, 0.03, 0]}><cylinderGeometry args={[0.62, 0.68, 0.06, 24]} /><meshStandardMaterial color="#2a4a6e" metalness={0.25} roughness={0.35} emissive={color} emissiveIntensity={0.28} transparent opacity={0.85} /></mesh>
-    <mesh position={[0, 0.065, 0]} rotation={[-Math.PI / 2, 0, 0]}><ringGeometry args={[0.56, 0.62, 6]} /><meshBasicMaterial color={color} transparent opacity={0.9} /></mesh>
-    <mesh ref={ring} position={[0, 0.075, 0]} rotation={[-Math.PI / 2, 0, 0]}><ringGeometry args={[0.36, 0.42, 48, 1, 0, Math.PI * 1.4]} /><meshBasicMaterial color={color} transparent opacity={0.5} depthWrite={false} side={THREE.DoubleSide} /></mesh>
-  </group>;
-}
 
 function EnergyCore() {
   const core = useRef(null);
@@ -753,17 +729,17 @@ function EnergyCore() {
 // Soft round contact shadow (one transparent disc) — replaces shadow mapping on phones.
 function BlobShadow({ position, groundRef, controlRef }) {
   const mesh = useRef(null);
-  useFrame(() => { const p = controlRef?.current?.pos || position; if (mesh.current) mesh.current.position.set(p[0], (groundRef?.current ?? 0) + 0.015, p[1]); });
+  useFrame(() => {
+    const p = controlRef?.current?.pos || position;
+    if (!mesh.current) return;
+    mesh.current.visible = !controlRef?.current?.vehicle;
+    mesh.current.position.set(p[0], (groundRef?.current ?? 0) + 0.015, p[1]);
+  });
   return <mesh ref={mesh} rotation={[-Math.PI / 2, 0, 0]} renderOrder={1}>
-    <circleGeometry args={[0.32, 24]} /><meshBasicMaterial color="#000000" transparent opacity={0.28} depthWrite={false} />
+    <circleGeometry args={[0.26, 24]} /><meshBasicMaterial color="#000000" transparent opacity={REALISTIC_LIGHTING ? 0.18 : 0.28} depthWrite={false} />
   </mesh>;
 }
 
-function ZoneRings({ zones, groundAt }) {
-  return zones.map((zone) => <mesh key={zone.id} rotation={[-Math.PI / 2, 0, 0]} position={[zone.center[0], groundAt(zone.center[0], zone.center[1]) + 0.02, zone.center[1]]}>
-    <ringGeometry args={[zone.radius - 0.12, zone.radius, 96]} /><meshBasicMaterial color={zone.color} transparent opacity={0.45} />
-  </mesh>);
-}
 
 // WAVE effect: two expanding neon rings and rising sparkles around Twini.
 function EmoteBurst({ signal, position, groundRef, controlRef }) {
@@ -859,12 +835,64 @@ function GuideBeam({ guide, playerPosition, groundAt, controlRef }) {
   </>;
 }
 
+// Walk/run animation state derived from Twini's real speed. Polled ~8x/s (setState outside the render loop)
+// so the clip always matches what the body is doing and the rest of the scene never re-renders for it.
+function useLiveMotion(controlRef, moving, running) {
+  const [motion, setMotion] = useState({ moving: false, running: false });
+  const last = useRef(motion);
+  // Checked every rendered frame (no timer lag): the walk clip starts the very frame the stick is pushed,
+  // even before the body has picked up speed, and React only re-renders when the state really changes.
+  useFrame(() => {
+    const live = controlRef?.current;
+    if (!live) return;
+    const pushing = Math.hypot(live.input.dx || 0, live.input.dz || 0) > STICK_DEAD || !!live.auto;
+    const m = !live.vehicle && (pushing || live.speed > 0.12 || live.dashT > 0);
+    const r = m && !!live.running && !live.exhausted;
+    if (last.current.moving !== m || last.current.running !== r) {
+      last.current = { moving: m, running: r };
+      setMotion(last.current);
+    }
+  });
+  return controlRef ? motion : { moving, running };
+}
+
 // Integrates Twini's movement once per frame. Rendered as the FIRST child of the scene so every other
 // frame callback (avatar, shadow, camera, guide arrows) reads the same, already-updated position.
 function LocomotionDriver({ controlRef, cameraForwardRef }) {
-  useFrame((_state, delta) => {
+  useFrame(({ clock }, delta) => {
     const live = controlRef?.current;
     if (!live) return;
+    const world = live.world;
+    const t = clock.elapsedTime;
+    // ---- Vehicles: every vehicle is simulated (parked boats bob on the waves, released ones coast to a stop).
+    const vehicles = live.vehicles || [];
+    const frame = Math.min(delta || 1 / 60, 0.2);
+    let drove = 0;
+    for (let i = 0; i < vehicles.length; i += 1) {
+      const vehicle = vehicles[i];
+      const driving = vehicle === live.vehicle;
+      // PATROL while driving = cruise control (gentle throttle).
+      const input = driving ? (live.input.dx || live.input.dz ? live.input : live.auto ? { dx: 0, dz: -0.6 } : live.input) : null;
+      let left = frame;
+      while (left > 1e-4) {
+        const sdt = Math.min(left, 0.05);
+        left -= sdt;
+        const moved = stepVehicle(vehicle, input, driving && live.running && !live.exhausted, sdt, t, world, live.vehicleStats || world.vehicleStats);
+        if (driving) drove += moved;
+      }
+    }
+    if (live.vehicle) {
+      const v = live.vehicle;
+      live.pos[0] = v.pos[0];
+      live.pos[1] = v.pos[1];
+      live.vel[0] = 0; live.vel[1] = 0;
+      live.speed = 0;
+      live.dashT = 0;
+      live.distance += drove;
+      live.facing = { dx: Math.sin(v.yaw), dz: Math.cos(v.yaw) };
+      live.seat = seatOf(v);
+      return;
+    }
     // ---- Locomotion: joystick/keys (screen space, camera relative) or patrol (world space) → smoothed velocity.
     let ix = live.input.dx;
     let iz = live.input.dz;
@@ -895,7 +923,7 @@ function LocomotionDriver({ controlRef, cameraForwardRef }) {
     while (remaining > 1e-4) {
       const sdt = Math.min(remaining, 0.05);
       remaining -= sdt;
-      const k = 1 - Math.exp(-(tx || tz ? 11 : 15) * sdt); // quick but soft acceleration / braking
+      const k = 1 - Math.exp(-(tx || tz ? 20 : 18) * sdt); // snappy acceleration / braking
       v[0] += (tx - v[0]) * k;
       v[1] += (tz - v[1]) * k;
       if (!tx && !tz && Math.hypot(v[0], v[1]) < 0.03) { v[0] = 0; v[1] = 0; }
@@ -906,8 +934,10 @@ function LocomotionDriver({ controlRef, cameraForwardRef }) {
         const pos = live.pos;
         let nx = Math.max(-WORLD_LIMIT, Math.min(WORLD_LIMIT, pos[0] + vx * sdt));
         let nz = Math.max(-WORLD_LIMIT, Math.min(WORLD_LIMIT, pos[1] + vz * sdt));
-        // The Monas tower is solid: slide along its wall.
-        const inTower = (x, z) => Math.abs(x) < MONAS_TOWER_HALF && Math.abs(z) < MONAS_TOWER_HALF;
+        // The Monas tower is solid (slide along its wall); deep sea is not walkable on the coast.
+        // (If Twini somehow stands in deep water — old save, environment switch — let them walk back out.)
+        const wet = world && !world.walkable(pos[0], pos[1]);
+        const inTower = (x, z) => (Math.abs(x) < MONAS_TOWER_HALF && Math.abs(z) < MONAS_TOWER_HALF) || (world && !wet ? !world.walkable(x, z) : false);
         if (inTower(nx, nz)) {
           if (!inTower(nx, pos[1])) nz = pos[1];
           else if (!inTower(pos[0], nz)) nx = pos[0];
@@ -920,16 +950,50 @@ function LocomotionDriver({ controlRef, cameraForwardRef }) {
     }
     live.speed = Math.hypot(v[0], v[1]);
     if (live.speed > 0.15 && !(live.dashT > 0 && live.lockFacing)) live.facing = { dx: v[0] / live.speed, dz: v[1] / live.speed };
-    live.__f = (live.__f || 0) + 1; live.__t = (live.__t || 0) + (delta || 0);
-    if (live.__t >= 1) { console.log('[MOVEDBG]', 'fps', live.__f, 'pos', live.pos[0].toFixed(2), live.pos[1].toFixed(2), 'speed', live.speed.toFixed(2)); live.__f = 0; live.__t = 0; }
   });
   return null;
 }
 
+// Lowest camera: slightly below the look target, i.e. looking up at Twini from foot level.
+const MAX_POLAR = Math.PI * 0.6;
 const DEFAULT_LIGHTING = { ambient: 1.5, sun: 2.3, sky: '#8db5c1', fogNear: 35, fogFar: 140 };
 
-function World({ playerPosition, movementDirection = { dx: 0, dz: 1 }, moving, running, jumping, cameraZoom = 1.0, cameraTilt = 0, foundPickups, character, cameraForwardRef, worldObjects = [], objectState = {}, highlightId = null, zones = [], lighting = DEFAULT_LIGHTING, cameraSensitivity = 1, emoteSignal = 0, focusSignal = 0, guide = null, controlRef }) {
+function StartPointMarker({ position, groundAt }) {
+  const beacon = useRef(null);
+  const y = groundAt ? groundAt(position[0], position[1]) : 0;
+  useFrame(({ clock }) => {
+    const node = beacon.current;
+    if (!node) return;
+    const t = clock.elapsedTime;
+    node.rotation.y = t * 0.9;
+    node.position.y = y + 0.95 + Math.sin(t * 2) * 0.08;
+  });
+  return <group position={[position[0], 0, position[1]]}>
+    <mesh position={[0, y + 0.02, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+      <ringGeometry args={[0.62, 0.8, 34]} />
+      <meshBasicMaterial color="#8fffcf" transparent opacity={0.55} side={THREE.DoubleSide} />
+    </mesh>
+    <mesh position={[0, y + 0.03, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+      <circleGeometry args={[0.56, 30]} />
+      <meshBasicMaterial color="#5cffb0" transparent opacity={0.12} />
+    </mesh>
+    <group ref={beacon} position={[0, y + 0.95, 0]}>
+      <mesh><octahedronGeometry args={[0.16, 0]} /><meshBasicMaterial color="#b8ffe0" /></mesh>
+      <mesh position={[0, -0.9, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+        <ringGeometry args={[0.32, 0.38, 24]} />
+        <meshBasicMaterial color="#8fffcf" transparent opacity={0.5} side={THREE.DoubleSide} />
+      </mesh>
+    </group>
+  </group>;
+}
+
+function World({ playerPosition, movementDirection = { dx: 0, dz: 1 }, moving, running, jumping, cameraZoom = 1.0, cameraTilt = 0, foundPickups, character, cameraForwardRef, worldObjects = [], objectState = {}, highlightId = null, zones = [], lighting = DEFAULT_LIGHTING, cameraSensitivity = 1, emoteSignal = 0, focusSignal = 0, guide = null, controlRef, environment = 'monas', growth = null, unlockBonus = 0, weapon = null, vehicleStats = null, district = null, cosmetics = null, characterId = 'twini-idtc' }) {
   const orbitControls = useRef(null);
+  const env = environmentById(environment);
+  const isMonas = env.id === 'monas';
+  const goldMaterial = useMemo(() => new THREE.MeshMatcapMaterial({ matcap: makeGoldMatcap(), color: '#ffffff' }), []);
+  // Day/night sky tinted towards the environment's own palette.
+  const skyColor = useMemo(() => (env.sky ? `#${new THREE.Color(lighting.sky).lerp(new THREE.Color(env.sky), 0.55).getHexString()}` : lighting.sky), [env.sky, lighting.sky]);
   // Real walkable surface under Twini (ray cast against the kawasan mesh, throttled), so feet stand on the paving.
   const kawasanScene = useRef(null);
   const groundMeshes = useRef([]);
@@ -959,8 +1023,48 @@ function World({ playerPosition, movementDirection = { dx: 0, dz: 1 }, moving, r
   // Once the real Monas & kawasan model is on screen, hide procedural props that would overlap it.
   const [kawasanReady, setKawasanReady] = useState(false);
   const outsideKawasan = ([x, z]) => !kawasanReady || !insideKawasan(x, z, 1);
-  const groundAt = (x, z) => (kawasanReady ? kawasanGroundHeight(x, z) : 0);
+  const isCoastal = env.id === 'coastal';
+  const groundAt = (x, z) => (isMonas
+    ? Math.max(kawasanReady ? kawasanGroundHeight(x, z) : 0, monasRaisedHeight(x, z))
+    : isCoastal ? beachHeight(x, z) : 0);
   const groundY = groundAt(playerPosition[0], playerPosition[1]);
+  // Rideable vehicles of this environment + the movement rules the frame loop needs (shared via controlRef).
+  const vehicles = useMemo(() => spawnVehicles(env.id), [env.id]);
+  const solidTower = (x, z, m = 0) => Math.abs(x) < MONAS_TOWER_HALF + m && Math.abs(z) < MONAS_TOWER_HALF + m;
+  const rules = {
+    groundAt,
+    // Upgrade kendaraan (turbo/suspensi/armor) dibaca stepVehicle lewat controlRef.
+    vehicleStats,
+    walkable: (x, z) => !isCoastal || Math.hypot(x, z) <= WADE_R || onPier(x, z),
+    canDrive: (type, x, z) => {
+      // Mobil/motor tidak boleh naik ke pelataran (radius 6,6) supaya tidak menembus tangga.
+      if (solidTower(x, z, VEHICLE_TYPES[type].water ? 0 : 3.4)) return false;
+      if (VEHICLE_TYPES[type].water) return isCoastal && isOpenWater(x, z);
+      return !isCoastal || Math.hypot(x, z) <= SHORE_R + 1.2;
+    },
+    // Surface a projectile can hit: the sea (splash) or the ground.
+    surfaceAt: (x, z, t) => {
+      const g = groundAt(x, z);
+      if (isCoastal && !onPier(x, z) && Math.hypot(x, z) > SHORE_R) {
+        const w = oceanHeight(x, z, t);
+        if (w > g) return { y: w, water: true };
+      }
+      return { y: g, water: false };
+    },
+  };
+  if (controlRef?.current) {
+    controlRef.current.world = rules;
+    if (controlRef.current.vehicles !== vehicles) {
+      controlRef.current.vehicles = vehicles;
+      controlRef.current.vehicle = null; // environment switched: step out of the old vehicle
+    }
+  }
+  const teleSeen = useRef(controlRef?.current?.teleport?.seq || 0);
+  const tiltSeen = useRef(cameraTilt ?? 0);
+  // Textured ground (grass / paving) instead of a flat colour.
+  const groundMat = useMemo(() => (env.id === 'smartcity'
+    ? groundMaterial('concrete', [60, 60], { color: '#8a94a6' })
+    : groundMaterial('grass', [75, 75], { color: env.id === 'highland' ? '#e6f0d6' : '#ffffff' })), [env.id]);
   if (surfaceRef.current == null) surfaceRef.current = groundY;
   const trees = [[-3, -4], [3, -4], [-4, 1], [4, 2], [-2, 6], [2, 7], [-8, 4], [8, -5], [-6, -7], [6, 6], [-9, -2], [9, 2], [-3, 9], [3, -9], [-7, 0], [7, 0], [0, -8], [0, 8], [-10, -5], [10, 5], [-17, -18], [-10, -19], [0, -18], [10, -18], [18, -16], [-18, -8], [-19, 2], [-18, 13], [-10, 19], [0, 19], [12, 18], [19, 10], [19, -1], [12, -18], [-27, -18], [-25, -8], [-25, 4], [-23, 16], [-16, 24], [-6, 26], [5, 25], [16, 23], [25, 15], [27, 5], [26, -7], [22, -20], [12, -26], [0, -27], [-12, -25]];
   const blocks = [[-12, -10, 2.3, 4, 3], [-8, -12, 2.1, 3, 2.5], [-3, -12, 2.5, 5, 3], [3, -12, 2.5, 3.6, 3], [8, -11, 3, 5.2, 3.2], [12, -8, 2.6, 4.2, 3], [-12, 8, 2.6, 4.5, 3], [-8, 12, 2.2, 3.6, 3], [8, 11, 2.8, 5, 3], [12, 8, 2.5, 4, 3], [-12, 0, 2.4, 5, 3], [12, -1, 2.5, 4.5, 3], [-10, 11, 2.6, 6.5, 3.2], [10, -13, 2.8, 7, 3.4], [-13, -4, 2.5, 6, 3.2], [13, 4, 2.4, 5.5, 3], [-20, -17, 3.5, 7, 4], [-14, -20, 3, 4.5, 4], [-3, -21, 3.5, 8, 4], [8, -21, 4, 6, 4], [18, -20, 3.8, 9, 4], [-21, -5, 4, 6, 4], [-21, 8, 3.5, 8, 4], [-18, 19, 4, 5, 4], [-5, 21, 3.5, 7, 4], [8, 21, 4, 9, 4], [20, 18, 3.8, 6, 4], [21, 4, 4, 7, 4]];
@@ -970,7 +1074,8 @@ function World({ playerPosition, movementDirection = { dx: 0, dz: 1 }, moving, r
     const dt = Math.min(delta || 1 / 60, 0.05);
     const live = controlRef?.current;
     const p = live ? live.pos : playerPosition;
-    const groundY = groundAt(p[0], p[1]);
+    const riding = live?.vehicle || null;
+    const groundY = riding ? riding.y : groundAt(p[0], p[1]);
     // Ground probe: at most ~6x/s and only after Twini moved. Hits far from the analytic height
     // (railings, roofs, trees) are ignored so Twini never climbs onto props.
     const probe = surfaceProbe.current;
@@ -986,28 +1091,44 @@ function World({ playerPosition, movementDirection = { dx: 0, dz: 1 }, moving, r
         const hit = raycaster.intersectObjects(groundMeshes.current, false)[0];
         if (hit && Math.abs(hit.point.y - groundY) <= 0.45) surface = hit.point.y;
       }
-      surfaceRef.current = surface;
+      // Pelataran Monas adalah lantai analitik: jangan biarkan raycast GLB menurunkan Twini di bawahnya.
+      surfaceRef.current = isMonas ? Math.max(surface, groundY) : surface;
     }
+    if (live) live.groundY = surfaceRef.current;
+    // Teleport: jump the camera along with Twini instead of flying across the map.
+    const teleported = !!(live?.teleport && live.teleport.seq !== teleSeen.current);
+    if (teleported) teleSeen.current = live.teleport.seq;
     const zoom = cameraZoom ?? 1.0;
-    camera.fov = 46 / zoom;
+    camera.fov = 56 / zoom; // wider field of view
     camera.updateProjectionMatrix();
     const controls = orbitControls.current?.instance || orbitControls.current;
     if (controls?.target) {
       const lookDir = live ? live.facing : movementDirection;
-      const ahead = live ? Math.min(1, live.speed / WALK_SPEED) * 1.0 : moving ? 1.2 : 0;
+      const ahead = riding ? Math.min(2.4, Math.abs(riding.speed) / 5) : live ? Math.min(1, live.speed / WALK_SPEED) * 1.0 : moving ? 1.2 : 0;
       const frontX = (lookDir.dx || 0) * ahead;
       const frontZ = (lookDir.dz || 0) * ahead;
       const tilt = cameraTilt ?? 0;
-      const goal = [p[0] + frontX, groundY + 0.85 + tilt * 0.8, p[1] + frontZ];
+      // Tilt up raises the look target; tilt down mostly lowers the camera itself (see below).
+      const goal = [p[0] + frontX, groundY + (riding ? 1.0 : 0.62) + (tilt > 0 ? tilt * 0.6 : tilt * 0.12), p[1] + frontZ];
       if (!followTarget.current) followTarget.current = [...controls.target.toArray()];
       const prev = followTarget.current;
-      const follow = 1 - Math.exp(-9 * dt); // frame-rate independent camera follow
+      const follow = teleported ? 1 : 1 - Math.exp(-9 * dt); // frame-rate independent camera follow
       const next = prev.map((value, index) => value + (goal[index] - value) * follow);
       followTarget.current = next;
       camera.position.x += next[0] - prev[0];
       camera.position.y += next[1] - prev[1];
       camera.position.z += next[2] - prev[2];
       controls.target.set(next[0], next[1], next[2]);
+      // Tilt buttons swing the camera around Twini: down = lower, until it looks up from foot level.
+      const tiltDelta = tilt - tiltSeen.current;
+      if (Math.abs(tiltDelta) > 1e-4) {
+        tiltSeen.current = tilt;
+        const offset = camera.position.clone().sub(controls.target);
+        const sph = new THREE.Spherical().setFromVector3(offset);
+        sph.phi = Math.min(MAX_POLAR, Math.max(0.12, sph.phi - tiltDelta * 0.46));
+        offset.setFromSpherical(sph);
+        camera.position.copy(controls.target).add(offset);
+      }
       if (focus.current.signal !== focusSignal) { focus.current = { signal: focusSignal, start: clock.elapsedTime }; }
       if (focus.current.start >= 0) {
         const k = Math.min(1, (clock.elapsedTime - focus.current.start) / 0.45);
@@ -1025,10 +1146,31 @@ function World({ playerPosition, movementDirection = { dx: 0, dz: 1 }, moving, r
         camera.position.y += (goalY - camera.position.y) * blend;
         if (k >= 1) focus.current.start = -1;
       }
+      // Driving: the camera swings in behind the vehicle (chase cam) and keeps a wider distance.
+      if (riding && Math.abs(riding.speed) > 1.2 && focus.current.start < 0) {
+        const dir = riding.speed < 0 ? -1 : 1;
+        const hx = Math.sin(riding.yaw) * dir;
+        const hz = Math.cos(riding.yaw) * dir;
+        const horizontal = Math.max(riding.type === 'motor' ? 4.2 : 5.2, Math.hypot(camera.position.x - next[0], camera.position.z - next[2]));
+        const chase = 1 - Math.exp(-2.4 * dt);
+        camera.position.x += (next[0] - hx * horizontal - camera.position.x) * chase;
+        camera.position.z += (next[2] - hz * horizontal - camera.position.z) * chase;
+        camera.position.y += (next[1] + Math.max(1.4, camera.position.y - next[1]) - camera.position.y) * chase;
+      }
       controls.update?.();
       // Tilt lock: the camera never dips below the surface (no view from under the ground).
-      const minCamY = Math.max(groundAt(camera.position.x, camera.position.z), surfaceRef.current ?? 0) + 0.45;
+      const minCamY = Math.max(groundAt(camera.position.x, camera.position.z), surfaceRef.current ?? 0, isCoastal ? WATER_LEVEL + 0.35 : -Infinity, riding ? riding.y : -Infinity) + 0.12; // camera may sit right at foot level
       if (camera.position.y < minCamY) { camera.position.y = minCamY; camera.lookAt(controls.target); }
+      // Keep the camera outside the solid central landmark so it never looks hollow from inside.
+      const solids = isMonas ? [[6.0, 4.6], [2.05, 27.6]] : env.id === 'smartcity' ? [[5.9, 1.9], [3.5, 34]] : env.id === 'coastal' ? [[7.0, 2.4], [2.9, 19]] : [[7.0, 2.4], [4.6, 10.3]];
+      for (const [half, top] of solids) {
+        const cx = camera.position.x;
+        const cz = camera.position.z;
+        if (camera.position.y < top && Math.abs(cx) < half && Math.abs(cz) < half) {
+          if (Math.abs(cx) > Math.abs(cz)) camera.position.x = Math.sign(cx || 1) * half; else camera.position.z = Math.sign(cz || 1) * half;
+          camera.lookAt(controls.target);
+        }
+      }
     }
     if (cameraForwardRef) {
       const target = controls?.target;
@@ -1040,16 +1182,20 @@ function World({ playerPosition, movementDirection = { dx: 0, dz: 1 }, moving, r
   });
   return <>
     <LocomotionDriver controlRef={controlRef} cameraForwardRef={cameraForwardRef} />
-    <color attach="background" args={[lighting.sky]} />
-    <fog attach="fog" args={[lighting.sky, lighting.fogNear, lighting.fogFar]} />
-    <ambientLight intensity={lighting.ambient} />
-    <directionalLight position={[14, 22, 10]} intensity={lighting.sun} castShadow />
-    <hemisphereLight args={['#d7f3ff', '#365744', 0.8]} />
-    <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.12, 0]} receiveShadow><planeGeometry args={[300, 300]} /><meshStandardMaterial color="#4a9a70" roughness={0.95} /></mesh>
+    <color attach="background" args={[skyColor]} />
+    <fog attach="fog" args={[skyColor, lighting.fogNear, isMonas ? lighting.fogFar : lighting.fogFar * 1.25]} />
+    {/* Image-based sky lighting + a player-following shadow sun (web); flat ambient is reduced for contrast. */}
+    <SkyEnvironment skyColor={skyColor} intensity={isMonas ? 0.55 : 0.75} />
+    <ambientLight intensity={lighting.ambient * (REALISTIC_LIGHTING ? 0.45 : 1)} />
+    <FollowSun controlRef={controlRef} fallback={playerPosition} intensity={lighting.sun * (REALISTIC_LIGHTING ? 1.15 : 1)} />
+    <hemisphereLight args={['#d7f3ff', '#365744', REALISTIC_LIGHTING ? 0.55 : 0.8]} />
+    {!isCoastal && <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.12, 0]} receiveShadow material={groundMat}><planeGeometry args={[300, 300]} /></mesh>}
     {/* Square open park boundary: 280 m across, well beyond the Monas plaza. */}
-    {[[-140, 0, 280, 0.34], [140, 0, 280, 0.34], [0, -140, 0.34, 280], [0, 140, 0.34, 280]].map(([x, z, width, depth], index) => (
+    {!isCoastal && [[-140, 0, 280, 0.34], [140, 0, 280, 0.34], [0, -140, 0.34, 280], [0, 140, 0.34, 280]].map(([x, z, width, depth], index) => (
       <mesh key={`park-boundary-${index}`} position={[x, 0.015, z]}><boxGeometry args={[width, 0.04, depth]} /><meshBasicMaterial color="#b6d4ac" transparent opacity={0.5} /></mesh>
     ))}
+    {!isMonas && <EnvironmentScene id={env.id} skyColor={skyColor} sunIntensity={lighting.sun} />}
+    {isMonas && <>
     {!kawasanReady && <>
     {/* Medan Merdeka's planted lawns, tiled ceremonial plaza, and radial walks. */}
     <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.045, 0]}><ringGeometry args={[3.8, 4.45, 64]} /><meshStandardMaterial color="#b9b5a5" roughness={0.82} /></mesh>
@@ -1062,36 +1208,60 @@ function World({ playerPosition, movementDirection = { dx: 0, dz: 1 }, moving, r
     {outsideKawasan([16, -11]) && <ParkPond position={[16, -11]} size={[8, 4.5]} />}
     {outsideKawasan([-17, -11]) && <SportsCourt position={[-17, -11]} />}
     <MonasKawasan onReady={setKawasanReady} onScene={setKawasanScene} />
-    {!kawasanReady && <MonasFallback />}
-    {kawasanReady && <GoldenFlameSparkle />}
-    {trees.map(([x, z], index) => outsideKawasan([x, z]) && <ParkTree key={`tree-${index}`} position={[x, 0, z]} scale={0.72 + (index % 3) * 0.13} />)}
+    <MonasTower goldMaterial={goldMaterial} />
+    <AmbientSky />
+    <GoldenFlameSparkle />
+    <TreeInstances items={trees.filter(outsideKawasan)} kind="broadleaf" size={0.78} />
     {lamps.map(([x, z], index) => outsideKawasan([x, z]) && <ParkLamp key={`lamp-${index}`} position={[x, 0, z]} />)}
     {!kawasanReady && [[-5, -2, 0], [5, -2, 0], [-5, 2, Math.PI], [5, 2, Math.PI]].map(([x, z, rotation], index) => <ParkBench key={`bench-${index}`} position={[x, 0, z]} rotation={rotation} />)}
+    </>}
     {pickupPoints.map(([x, z], index) => !foundPickups.includes(index) && <group key={`crystal-${index}`} position={[x, groundAt(x, z) + 0.65, z]}>
       <EnergyCore />
     </group>)}
     <ZoneRings zones={zones} groundAt={groundAt} />
+    <StartPointMarker position={startPointFor(env.id).position} groundAt={groundAt} />
     {worldObjects.map((object) => <WorldObjectMarker key={object.id} object={object} state={objectState[object.id]} highlighted={object.id === highlightId} groundY={groundAt(object.position[0], object.position[1])} />)}
-    <TwiniAvatar character={character} position={playerPosition} movementDirection={movementDirection} moving={moving} running={running} jumping={jumping} groundY={groundY} groundRef={surfaceRef} emoteSignal={emoteSignal} controlRef={controlRef} />
+    <TwiniAvatar character={character} cosmetics={cosmetics} characterId={characterId} position={playerPosition} movementDirection={movementDirection} moving={moving} running={running} jumping={jumping} groundY={groundY} groundRef={surfaceRef} emoteSignal={emoteSignal} controlRef={controlRef} />
     <BlobShadow position={playerPosition} groundRef={surfaceRef} controlRef={controlRef} />
     <EmoteBurst signal={emoteSignal} position={playerPosition} groundRef={surfaceRef} controlRef={controlRef} />
     <GuideBeam guide={guide} playerPosition={playerPosition} groundAt={groundAt} controlRef={controlRef} />
-    <OrbitControls ref={orbitControls} makeDefault enablePan={false} enableDamping rotateSpeed={cameraSensitivity} minDistance={1.0} maxDistance={14} minPolarAngle={0.12} maxPolarAngle={Math.PI * 0.46} />
+    <VehiclesLayer vehicles={vehicles} controlRef={controlRef} />
+    <CityGrowthLayer growth={growth} groundAt={groundAt} unlockBonus={unlockBonus} />
+    <DistrictLayer district={district} groundAt={groundAt} coastal={isCoastal} />
+    <WabahLayer controlRef={controlRef} groundAt={groundAt} />
+    <NpcLayer controlRef={controlRef} groundAt={groundAt} />
+    <ShopDistrictLayer groundAt={groundAt} />
+    <CombatLayer controlRef={controlRef} envId={env.id} groundAt={groundAt} surfaceAt={rules.surfaceAt} weapon={weapon} />
+    <TeleportFx controlRef={controlRef} />
+    <OrbitControls ref={orbitControls} makeDefault enablePan={false} enableDamping rotateSpeed={cameraSensitivity} minDistance={0.8} maxDistance={24} minPolarAngle={0.12} maxPolarAngle={MAX_POLAR} />
   </>;
 }
 
+// Perangkat Android dengan layar rapat (PixelRatio ≤ 2) biasanya kelas menengah/bawah: cukup render
+// 1× piksel agar frame rate stabil. Web tetap 1,15× dan flagship tetap 1,25×.
+const LOW_END = Platform.OS !== 'web' && PixelRatio.get() <= 2;
+
 function SurvivalWorldSceneImpl(props) {
-  return <Canvas style={StyleSheet.absoluteFill} camera={{ position: [0, 3.6, 13.4], fov: 46, near: 0.05, far: 300 }} dpr={Platform.OS === 'web' ? [1, 1.15] : [1, 1.25]} shadows={Platform.OS === 'web'} gl={{ antialias: true, alpha: false, powerPreference: 'high-performance' }} onCreated={({ camera, gl }) => { quietExpoGL(gl); camera.lookAt(0, 0.85, 8); camera.updateProjectionMatrix(); }}>
+  const appActive = useAppActive();
+  return <Canvas
+    style={StyleSheet.absoluteFill}
+    frameloop={appActive ? 'always' : 'never'}
+    camera={{ position: [0, 3.2, 12.6], fov: 56, near: 0.05, far: 300 }}
+    dpr={Platform.OS === 'web' ? [1, 1.15] : [1, LOW_END ? 1 : 1.25]}
+    shadows={Platform.OS === 'web'}
+    gl={{ antialias: Platform.OS === 'web', stencil: false, alpha: false, powerPreference: 'high-performance' }}
+    onCreated={({ camera, gl }) => { quietExpoGL(gl); camera.lookAt(0, 0.62, 8); camera.updateProjectionMatrix(); }}>
     <World {...props} cameraZoom={props.cameraZoom ?? 1.0} cameraTilt={props.cameraTilt ?? 0} />
   </Canvas>;
 }
 
 // The screen re-renders a few times per second while Twini walks (HUD, mini map). The live position and
 // facing already reach the scene through controlRef every frame, so ignore those props here.
-const LIVE_PROPS = new Set(['playerPosition', 'movementDirection']);
+const LIVE_PROPS = new Set(['playerPosition', 'movementDirection', 'moving', 'running']);
 export default React.memo(SurvivalWorldSceneImpl, (prev, next) => {
   if (!next.controlRef) return false;
   const keys = new Set([...Object.keys(prev), ...Object.keys(next)]);
-  for (const key of keys) if (!LIVE_PROPS.has(key) && prev[key] !== next[key]) return false;
+  const changed = [...keys].filter((key) => !LIVE_PROPS.has(key) && prev[key] !== next[key]);
+  if (changed.length) return false;
   return true;
 });

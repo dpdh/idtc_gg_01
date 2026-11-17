@@ -20,9 +20,16 @@ const DAY = 86_400_000;
 
 function seedContent(db, content) {
   transaction(db, () => {
-    if (!db.prepare('SELECT COUNT(*) AS n FROM missions').get().n) content.missions.forEach((m) => upsertMission(db, m));
-    if (!db.prepare('SELECT COUNT(*) AS n FROM assets').get().n) content.assets.forEach((a) => upsertAsset(db, a));
-    if (!db.prepare('SELECT COUNT(*) AS n FROM products').get().n) content.products.forEach((p) => upsertProduct(db, p));
+    // Insert content that is missing from the database (first run or new missions/assets added by an
+    // app update). Existing rows are never overwritten so admin edits (status, rewards, prices) survive
+    // a restart.
+    const hasMission = db.prepare('SELECT 1 FROM missions WHERE id = ?');
+    content.missions.forEach((m) => { if (!hasMission.get(m.id)) upsertMission(db, m); });
+    const hasAsset = db.prepare('SELECT 1 FROM assets WHERE id = ?');
+    content.assets.forEach((a) => { if (!hasAsset.get(a.id)) upsertAsset(db, a); });
+    // New catalogue items are added on every start; existing rows (admin-edited prices/stock) are never overwritten.
+    const hasProduct = db.prepare('SELECT 1 FROM products WHERE id = ?');
+    content.products.forEach((p) => { if (!hasProduct.get(p.id)) upsertProduct(db, p); });
     const setConfig = db.prepare('INSERT OR IGNORE INTO config (key, value_json) VALUES (?, ?)');
     Object.entries(content.config).forEach(([key, value]) => setConfig.run(key, JSON.stringify(value)));
   });
@@ -52,7 +59,7 @@ function updateConfig(db, changes) {
 // ---------- missions ----------
 
 const DIFFICULTIES = ['easy', 'medium', 'hard', 'expert', 'legendary'];
-const OBJECTIVE_EVENTS = ['explore_zone', 'collect_core', 'scan_object', 'activate_sensor', 'identify_pollution', 'repair_drainage', 'survive_storm', 'rescue_npc', 'restore_station', 'sync_object', 'infra_challenge', 'restore_core', 'find_treasure', 'team_challenge'];
+const OBJECTIVE_EVENTS = ['explore_zone', 'collect_core', 'scan_object', 'activate_sensor', 'identify_pollution', 'repair_drainage', 'survive_storm', 'rescue_npc', 'restore_station', 'sync_object', 'infra_challenge', 'restore_core', 'find_treasure', 'team_challenge', 'purge_wabah', 'build_city_asset'];
 
 function validateMission(m) {
   if (!/^[a-z0-9-]{2,40}$/.test(m.id || '')) throw new ApiError(400, 'invalid_mission', 'ID misi: 2–40 karakter a-z, 0-9, -');
@@ -542,7 +549,7 @@ function verifyPassword(password, stored) {
 
 const DUMMY_HASH = hashPassword(crypto.randomBytes(12).toString('hex'));
 const normalizeEmail = (email) => String(email || '').trim().toLowerCase();
-const publicUser = (u) => ({ id: u.id, email: u.email, fullName: u.full_name, role: u.role, status: u.status, createdAt: u.created_at });
+const publicUser = (u) => ({ id: u.id, email: u.email, fullName: u.full_name, role: u.role, status: u.status, createdAt: u.created_at, provider: u.auth_provider || 'password', avatarUrl: u.avatar_url || null, lastLoginAt: u.last_login_at || null });
 
 function validateCredentials(email, password) {
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 120) throw new ApiError(400, 'invalid_email', 'Email tidak valid.');
@@ -565,7 +572,7 @@ function login(db, { email, password }) {
   // Always run scrypt so response time does not reveal whether the email exists.
   const ok = verifyPassword(String(password || ''), user ? user.password_hash : DUMMY_HASH);
   if (!user || !ok) throw new ApiError(401, 'invalid_credentials', 'Email atau password salah.');
-  if (user.status !== 'active') throw new ApiError(403, 'banned', 'Akun dibekukan.');
+  if (user.status !== 'active') throw new ApiError(403, 'banned', user.status_reason ? `Akun dibekukan: ${user.status_reason}` : 'Akun dibekukan.');
   return createSession(db, user);
 }
 
@@ -574,7 +581,8 @@ function createSession(db, user) {
   const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
   db.prepare('DELETE FROM sessions WHERE user_id = ? AND expires_at < ?').run(user.id, now());
   db.prepare('INSERT INTO sessions (token_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)').run(tokenHash, user.id, now(), new Date(Date.now() + 30 * DAY).toISOString());
-  return { token, user: publicUser(user) };
+  db.prepare('UPDATE users SET last_login_at = ? WHERE id = ?').run(now(), user.id);
+  return { token, user: publicUser(db.prepare('SELECT * FROM users WHERE id = ?').get(user.id)) };
 }
 
 function userFromToken(db, token) {
@@ -604,6 +612,76 @@ function bootstrapAdmin(db, email, password) {
   return id;
 }
 
+// ---------- Google Sign-In ----------
+// The app obtains a Google ID token (Gmail account) and the server verifies it with Google before trusting it.
+// Allowed audiences = OAuth client IDs from the environment (web / Android / iOS).
+function googleClientIds() {
+  return ['TWINI_GOOGLE_WEB_CLIENT_ID', 'TWINI_GOOGLE_ANDROID_CLIENT_ID', 'TWINI_GOOGLE_IOS_CLIENT_ID', 'TWINI_GOOGLE_CLIENT_IDS']
+    .flatMap((key) => String(process.env[key] || '').split(',')).map((id) => id.trim()).filter(Boolean);
+}
+function googleConfig() {
+  return {
+    enabled: googleClientIds().length > 0,
+    webClientId: process.env.TWINI_GOOGLE_WEB_CLIENT_ID || null,
+    androidClientId: process.env.TWINI_GOOGLE_ANDROID_CLIENT_ID || null,
+    iosClientId: process.env.TWINI_GOOGLE_IOS_CLIENT_ID || null,
+  };
+}
+async function defaultGoogleVerifier(idToken) {
+  const res = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(idToken)}`);
+  if (!res.ok) throw new ApiError(401, 'invalid_google_token', 'Token Google tidak valid atau kedaluwarsa.');
+  return res.json();
+}
+let googleVerifier = defaultGoogleVerifier;
+function setGoogleVerifier(fn) { googleVerifier = fn || defaultGoogleVerifier; }
+
+async function googleLogin(db, { idToken } = {}) {
+  const allowed = googleClientIds();
+  if (!allowed.length) throw new ApiError(503, 'google_disabled', 'Login Google belum dikonfigurasi di server.');
+  if (typeof idToken !== 'string' || idToken.length < 20 || idToken.length > 4096) throw new ApiError(400, 'invalid_google_token', 'Token Google tidak valid.');
+  const info = await googleVerifier(idToken);
+  if (!info || !allowed.includes(info.aud)) throw new ApiError(401, 'invalid_google_token', 'Token Google bukan untuk aplikasi ini.');
+  if (!['accounts.google.com', 'https://accounts.google.com'].includes(info.iss)) throw new ApiError(401, 'invalid_google_token', 'Penerbit token tidak valid.');
+  if (Number(info.exp) * 1000 < Date.now()) throw new ApiError(401, 'invalid_google_token', 'Token Google kedaluwarsa.');
+  if (!(info.email_verified === true || info.email_verified === 'true')) throw new ApiError(401, 'email_unverified', 'Email Google belum terverifikasi.');
+  const email = normalizeEmail(info.email);
+  const sub = String(info.sub || '');
+  if (!sub || !email) throw new ApiError(401, 'invalid_google_token', 'Token Google tidak lengkap.');
+  let user = db.prepare('SELECT * FROM users WHERE google_sub = ?').get(sub) || db.prepare('SELECT * FROM users WHERE email = ?').get(email);
+  if (user) {
+    // Link the Google identity to an existing account with the same verified email.
+    db.prepare(`UPDATE users SET google_sub = ?, avatar_url = COALESCE(?, avatar_url),
+      auth_provider = CASE WHEN auth_provider = 'password' THEN 'password+google' ELSE auth_provider END, updated_at = ? WHERE id = ?`).run(sub, info.picture || null, now(), user.id);
+    user = db.prepare('SELECT * FROM users WHERE id = ?').get(user.id);
+  } else {
+    const id = newId('usr');
+    const name = String(info.name || email.split('@')[0]).slice(0, 80);
+    // No usable password: the account signs in through Google only (until the user sets one).
+    db.prepare(`INSERT INTO users (id, email, full_name, password_hash, auth_provider, google_sub, avatar_url, created_at, updated_at)
+      VALUES (?, ?, ?, ?, 'google', ?, ?, ?, ?)`).run(id, email, name, hashPassword(crypto.randomBytes(24).toString('hex')), sub, info.picture || null, now(), now());
+    ensurePlayer(db, id);
+    user = db.prepare('SELECT * FROM users WHERE id = ?').get(id);
+  }
+  if (user.status !== 'active') throw new ApiError(403, 'banned', user.status_reason ? `Akun dibekukan: ${user.status_reason}` : 'Akun dibekukan.');
+  return createSession(db, user);
+}
+
+// ---------- self-service account ----------
+function updateMe(db, user, changes = {}) {
+  const name = String(changes.fullName ?? user.full_name).trim().slice(0, 80);
+  if (!name) throw new ApiError(400, 'invalid_name', 'Nama tidak boleh kosong.');
+  db.prepare('UPDATE users SET full_name = ?, updated_at = ? WHERE id = ?').run(name, now(), user.id);
+  return { user: publicUser(db.prepare('SELECT * FROM users WHERE id = ?').get(user.id)) };
+}
+function changePassword(db, user, { currentPassword, newPassword } = {}) {
+  const fresh = db.prepare('SELECT * FROM users WHERE id = ?').get(user.id);
+  // Google-only accounts may set a first password without the (random) old one.
+  if (fresh.auth_provider !== 'google' && !verifyPassword(String(currentPassword || ''), fresh.password_hash)) throw new ApiError(401, 'invalid_credentials', 'Password saat ini salah.');
+  if (typeof newPassword !== 'string' || newPassword.length < 8 || newPassword.length > 200) throw new ApiError(400, 'invalid_password', 'Password minimal 8 karakter.');
+  db.prepare(`UPDATE users SET password_hash = ?, auth_provider = CASE WHEN auth_provider = 'google' THEN 'password+google' ELSE auth_provider END, updated_at = ? WHERE id = ?`).run(hashPassword(newPassword), now(), user.id);
+  return { ok: true };
+}
+
 // ---------- admin ----------
 
 function audit(db, actorId, action, target, detail) {
@@ -626,11 +704,72 @@ function adminOverview(db) {
   };
 }
 
-function adminPlayers(db) {
-  return db.prepare(`SELECT u.id, u.email, u.full_name AS fullName, u.role, u.status, u.created_at AS createdAt, COALESCE(p.xp,0) AS xp, COALESCE(p.streak,0) AS streak,
+function adminPlayers(db, filters = {}) {
+  const where = [];
+  const args = [];
+  const q = String(filters.q || '').trim().toLowerCase();
+  if (q) { where.push('(LOWER(u.email) LIKE ? OR LOWER(u.full_name) LIKE ? OR u.id = ?)'); args.push(`%${q}%`, `%${q}%`, q); }
+  if (['player', 'admin'].includes(filters.role)) { where.push('u.role = ?'); args.push(filters.role); }
+  if (['active', 'banned'].includes(filters.status)) { where.push('u.status = ?'); args.push(filters.status); }
+  if (filters.provider === 'google') where.push("u.auth_provider LIKE '%google%'");
+  if (filters.provider === 'password') where.push("u.auth_provider = 'password'");
+  return db.prepare(`SELECT u.id, u.email, u.full_name AS fullName, u.role, u.status, u.status_reason AS statusReason, u.auth_provider AS provider,
+      u.avatar_url AS avatarUrl, u.created_at AS createdAt, u.last_login_at AS lastLoginAt, COALESCE(p.xp,0) AS xp, COALESCE(p.streak,0) AS streak,
       (SELECT COALESCE(SUM(amount),0) FROM point_transactions t WHERE t.user_id = u.id) AS twinPoints,
+      (SELECT COUNT(*) FROM redemptions r WHERE r.user_id = u.id) AS redemptions,
+      (SELECT COUNT(*) FROM sessions s WHERE s.user_id = u.id AND s.expires_at > ?) AS activeSessions,
       (SELECT COUNT(*) FROM fraud_flags f WHERE f.user_id = u.id AND f.resolved = 0) AS openFlags
-    FROM users u LEFT JOIN players p ON p.user_id = u.id ORDER BY u.created_at DESC LIMIT 500`).all();
+    FROM users u LEFT JOIN players p ON p.user_id = u.id ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+    ORDER BY u.created_at DESC LIMIT 500`).all(now(), ...args);
+}
+
+function adminPlayerDetail(db, userId) {
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+  if (!user) throw new ApiError(404, 'not_found', 'Pemain tidak ditemukan.');
+  const player = db.prepare('SELECT * FROM players WHERE user_id = ?').get(userId) || {};
+  return {
+    user: { ...publicUser(user), statusReason: user.status_reason || null, updatedAt: user.updated_at || null },
+    stats: { xp: player.xp || 0, streak: player.streak || 0, balance: balance(db, userId), lifetimeEarned: db.prepare("SELECT COALESCE(SUM(amount),0) AS n FROM point_transactions WHERE user_id = ? AND type = 'earn'").get(userId).n,
+      missionsCompleted: db.prepare('SELECT COUNT(*) AS n FROM mission_claims WHERE user_id = ?').get(userId).n,
+      activeSessions: db.prepare('SELECT COUNT(*) AS n FROM sessions WHERE user_id = ? AND expires_at > ?').get(userId, now()).n },
+    transactions: transactions(db, userId, 30),
+    redemptions: listRedemptions(db, userId),
+    flags: db.prepare('SELECT * FROM fraud_flags WHERE user_id = ? ORDER BY created_at DESC LIMIT 30').all(userId),
+    audit: db.prepare('SELECT * FROM audit_log WHERE target = ? ORDER BY id DESC LIMIT 30').all(userId),
+  };
+}
+
+function adminCreateUser(db, actor, body = {}) {
+  const email = normalizeEmail(body.email);
+  validateCredentials(email, body.password);
+  if (db.prepare('SELECT 1 FROM users WHERE email = ?').get(email)) throw new ApiError(409, 'email_taken', 'Email sudah terdaftar.');
+  const role = body.role === 'admin' ? 'admin' : 'player';
+  const id = newId('usr');
+  const name = String(body.fullName || email.split('@')[0]).trim().slice(0, 80);
+  db.prepare('INSERT INTO users (id, email, full_name, password_hash, role, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)').run(id, email, name, hashPassword(body.password), role, now(), now());
+  ensurePlayer(db, id);
+  audit(db, actor.id, 'player.create', id, `${email} (${role})`);
+  return { user: publicUser(db.prepare('SELECT * FROM users WHERE id = ?').get(id)) };
+}
+
+function adminRevokeSessions(db, actor, userId) {
+  if (!db.prepare('SELECT 1 FROM users WHERE id = ?').get(userId)) throw new ApiError(404, 'not_found', 'Pemain tidak ditemukan.');
+  const { changes } = db.prepare('DELETE FROM sessions WHERE user_id = ?').run(userId);
+  audit(db, actor.id, 'player.revoke_sessions', userId, `${changes} sesi`);
+  return { revoked: changes };
+}
+
+// Account deletion keeps the point/redemption ledger for audit but removes personal data.
+function adminDeleteUser(db, actor, userId) {
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
+  if (!user) throw new ApiError(404, 'not_found', 'Pemain tidak ditemukan.');
+  if (userId === actor.id) throw new ApiError(422, 'self_lockout', 'Tidak bisa menghapus akun sendiri.');
+  db.prepare(`UPDATE users SET email = ?, full_name = 'Pengguna dihapus', password_hash = ?, google_sub = NULL, avatar_url = NULL,
+    status = 'banned', status_reason = 'Akun dihapus', role = 'player', updated_at = ? WHERE id = ?`)
+    .run(`deleted+${userId}@twini.invalid`, hashPassword(crypto.randomBytes(24).toString('hex')), now(), userId);
+  db.prepare('DELETE FROM sessions WHERE user_id = ?').run(userId);
+  audit(db, actor.id, 'player.delete', userId, user.email);
+  return { ok: true };
 }
 
 function adminUpdatePlayer(db, actor, userId, changes = {}) {
@@ -640,10 +779,16 @@ function adminUpdatePlayer(db, actor, userId, changes = {}) {
   if (changes.status && !['active', 'banned'].includes(changes.status)) throw new ApiError(400, 'invalid_status', 'Status tidak valid.');
   if (userId === actor.id && (changes.role === 'player' || changes.status === 'banned')) throw new ApiError(422, 'self_lockout', 'Tidak bisa menurunkan/membekukan akun sendiri.');
   if (changes.role) db.prepare('UPDATE users SET role = ? WHERE id = ?').run(changes.role, userId);
+  if (changes.fullName !== undefined) {
+    const name = String(changes.fullName).trim().slice(0, 80);
+    if (!name) throw new ApiError(400, 'invalid_name', 'Nama tidak boleh kosong.');
+    db.prepare('UPDATE users SET full_name = ? WHERE id = ?').run(name, userId);
+  }
   if (changes.status) {
-    db.prepare('UPDATE users SET status = ? WHERE id = ?').run(changes.status, userId);
+    db.prepare('UPDATE users SET status = ?, status_reason = ? WHERE id = ?').run(changes.status, changes.status === 'banned' ? String(changes.reason || '').slice(0, 200) || null : null, userId);
     if (changes.status === 'banned') db.prepare('DELETE FROM sessions WHERE user_id = ?').run(userId);
   }
+  db.prepare('UPDATE users SET updated_at = ? WHERE id = ?').run(now(), userId);
   audit(db, actor.id, 'player.update', userId, JSON.stringify(changes));
   return { ok: true };
 }
@@ -682,4 +827,5 @@ module.exports = {
   listProducts, upsertProduct, redeem, listRedemptions, updateRedemptionStatus, generateVouchers, validateVoucher,
   register, login, logout, userFromToken, bootstrapAdmin, publicUser,
   audit, adminOverview, adminPlayers, adminUpdatePlayer, adminAdjustPoints, adminTransactions, resolveFlag,
+  googleLogin, googleConfig, setGoogleVerifier, updateMe, changePassword, adminPlayerDetail, adminCreateUser, adminRevokeSessions, adminDeleteUser,
 };

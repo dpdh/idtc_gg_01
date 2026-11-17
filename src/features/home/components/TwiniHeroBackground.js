@@ -6,6 +6,7 @@ import { Platform, StyleSheet } from 'react-native';
 import { AdditiveBlending, Box3, CanvasTexture, Color, DataTexture, DoubleSide, Float32BufferAttribute, Euler, LoopOnce, MathUtils, Quaternion, RGBAFormat, SphereGeometry, Vector3 } from 'three';
 import { Canvas, quietExpoGL, useAnimations, useFrame, useGLTF, useThree } from '../../viewer/components/ThreeDRenderer';
 import { getGLTFFrame } from '../../viewer/utils/glbBounds';
+import useAppActive from '../../../shared/hooks/useAppActive';
 
 const FOV = 34;
 const TMP_Q = new Quaternion();
@@ -458,6 +459,7 @@ function AdaptiveQuality({ qualityRef }) {
 }
 
 export default function TwiniHeroBackground({ source, stage, greetSignal, reduceMotion, lowEnd, onReady, onError, lookRef, impulseRef }) {
+  const appActive = useAppActive();
   const fitRef = useRef(null);
   const qualityRef = useRef(lowEnd ? 'low' : 'high');
   const [model, setModel] = React.useState({ w: 1.4, h: 2.35 });
@@ -467,9 +469,12 @@ export default function TwiniHeroBackground({ source, stage, greetSignal, reduce
 
   return <Canvas
     style={StyleSheet.absoluteFill}
+    frameloop={appActive ? 'always' : 'never'}
     camera={{ position: [0, 0, 6], fov: FOV, near: 0.1, far: 60 }}
-    dpr={Platform.OS === 'web' ? [1, 1.5] : [1, lowEnd ? 1.25 : 1.75]}
-    gl={{ alpha: true, antialias: true, powerPreference: 'high-performance' }}
+    // Hero hanya latar: 1,5× sudah tajam di layar padat, sementara 1,75× memakan ~35% fill-rate lebih
+    // banyak dan membuat Home terasa berat di perangkat menengah.
+    dpr={Platform.OS === 'web' ? [1, 1.5] : [1, lowEnd ? 1 : 1.5]}
+    gl={{ alpha: true, antialias: true, stencil: false, powerPreference: 'high-performance' }}
     onCreated={({ gl }) => quietExpoGL(gl)}
   >
     <ambientLight intensity={1.15} />

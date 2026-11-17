@@ -2,7 +2,11 @@
   "expo": {
     "name": "TWINI",
     "slug": "twini",
-    "version": "1.0.12",
+    "scheme": [
+      "twini",
+      "com.twini.app"
+    ],
+    "version": "1.0.19",
     "orientation": "default",
     "icon": "./src/assets/imageTwini/gg_icon-IDTC-app.png",
     "ios": {
@@ -11,7 +15,24 @@
     },
     "android": {
       "package": "com.twini.app",
-      "versionCode": 13,
+      "versionCode": 20,
+      "allowBackup": false,
+      "permissions": [
+        "android.permission.INTERNET",
+        "android.permission.VIBRATE"
+      ],
+      "blockedPermissions": [
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_MEDIA_VIDEO",
+        "android.permission.READ_MEDIA_AUDIO",
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.USE_BIOMETRIC",
+        "android.permission.USE_FINGERPRINT",
+        "android.permission.SYSTEM_ALERT_WINDOW"
+      ],
       "adaptiveIcon": {
         "foregroundImage": "./src/assets/imageTwini/gg_icon-IDTC.png",
         "backgroundColor": "#0873bd"
@@ -30,7 +51,9 @@
           "backgroundColor": "#090f1b"
         }
       ],
-      "expo-secure-store"
+      "expo-secure-store",
+      "expo-web-browser",
+      "expo-audio"
     ]
   }
 }

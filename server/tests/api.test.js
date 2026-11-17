@@ -178,3 +178,69 @@ test('banned players lose access', async () => {
   await call('PATCH', `/admin/players/${target.id}`, { token: adminToken, body: { status: 'banned' } });
   assert.equal((await call('GET', '/wallet', { token: player })).status, 401);
 });
+
+test('google sign-in: rejected when unconfigured, then creates & links accounts', async () => {
+  const cfg = await call('GET', '/auth/config');
+  assert.equal(cfg.data.google.enabled, false);
+  const off = await call('POST', '/auth/google', { body: { idToken: 'x'.repeat(40) } });
+  assert.equal(off.status, 503);
+
+  process.env.TWINI_GOOGLE_WEB_CLIENT_ID = 'web-client.apps.googleusercontent.com';
+  const exp = Math.floor(Date.now() / 1000) + 600;
+  game.setGoogleVerifier(async (token) => {
+    if (token.startsWith('wrongaud')) return { aud: 'someone-else', iss: 'accounts.google.com', exp, email: 'a@gmail.com', email_verified: 'true', sub: '1' };
+    if (token.startsWith('unverified')) return { aud: 'web-client.apps.googleusercontent.com', iss: 'accounts.google.com', exp, email: 'u@gmail.com', email_verified: 'false', sub: '2' };
+    const [, email, sub] = token.split('|');
+    return { aud: 'web-client.apps.googleusercontent.com', iss: 'https://accounts.google.com', exp, email, email_verified: true, sub, name: 'Gmail User', picture: 'https://example.com/p.png' };
+  });
+  try {
+    assert.equal((await call('POST', '/auth/google', { body: { idToken: `wrongaud${'x'.repeat(30)}` } })).status, 401);
+    assert.equal((await call('POST', '/auth/google', { body: { idToken: `unverified${'x'.repeat(30)}` } })).status, 401);
+    const fresh = await call('POST', '/auth/google', { body: { idToken: `ok|new.twini@gmail.com|sub-new|${'x'.repeat(20)}` } });
+    assert.equal(fresh.status, 200);
+    assert.equal(fresh.data.user.provider, 'google');
+    assert.ok(fresh.data.token);
+    // Same Google account again → same user.
+    const again = await call('POST', '/auth/google', { body: { idToken: `ok|new.twini@gmail.com|sub-new|${'y'.repeat(20)}` } });
+    assert.equal(again.data.user.id, fresh.data.user.id);
+    // Existing password account with the same email gets linked.
+    const reg = await call('POST', '/auth/register', { body: { email: 'linked@gmail.com', password: 'Password123', fullName: 'Linked' } });
+    const linked = await call('POST', '/auth/google', { body: { idToken: `ok|linked@gmail.com|sub-linked|${'z'.repeat(20)}` } });
+    assert.equal(linked.data.user.id, reg.data.user.id);
+    assert.equal(linked.data.user.provider, 'password+google');
+    // Google-only account can set a first password, then log in with it.
+    assert.equal((await call('POST', '/auth/password', { token: fresh.data.token, body: { newPassword: 'NewPassword9' } })).status, 200);
+    assert.equal((await call('POST', '/auth/login', { body: { email: 'new.twini@gmail.com', password: 'NewPassword9' } })).status, 200);
+  } finally {
+    game.setGoogleVerifier(null);
+    delete process.env.TWINI_GOOGLE_WEB_CLIENT_ID;
+  }
+});
+
+test('admin user management: search, detail, create, ban with reason, revoke, delete', async () => {
+  const admin = await call('POST', '/auth/login', { body: { email: 'admin@test.local', password: 'AdminPass123' } });
+  const token = admin.data.token;
+  const created = await call('POST', '/admin/players', { token, body: { email: 'managed@test.local', password: 'Managed1234', fullName: 'Managed User' } });
+  assert.equal(created.status, 201);
+  const id = created.data.user.id;
+  const search = await call('GET', '/admin/players?q=managed', { token });
+  assert.equal(search.data.players.length, 1);
+  assert.equal(search.data.players[0].provider, 'password');
+  const login = await call('POST', '/auth/login', { body: { email: 'managed@test.local', password: 'Managed1234' } });
+  assert.equal(login.status, 200);
+  const detail = await call('GET', `/admin/players/${id}`, { token });
+  assert.equal(detail.data.user.email, 'managed@test.local');
+  assert.equal(detail.data.stats.activeSessions, 1);
+  assert.equal((await call('PATCH', `/admin/players/${id}`, { token, body: { fullName: 'Renamed', status: 'banned', reason: 'Spam' } })).status, 200);
+  const banned = await call('POST', '/auth/login', { body: { email: 'managed@test.local', password: 'Managed1234' } });
+  assert.equal(banned.status, 403);
+  assert.match(banned.data.error, /Spam/);
+  assert.equal((await call('GET', '/auth/me', { token: login.data.token })).status, 401); // sessions revoked on ban
+  assert.equal((await call('GET', '/admin/players?status=banned&q=renamed', { token })).data.players.length, 1);
+  assert.equal((await call('PATCH', `/admin/players/${id}`, { token, body: { status: 'active' } })).status, 200);
+  assert.equal((await call('POST', `/admin/players/${id}/revoke-sessions`, { token })).status, 200);
+  assert.equal((await call('DELETE', `/admin/players/${id}`, { token })).status, 200);
+  const gone = await call('GET', `/admin/players/${id}`, { token });
+  assert.match(gone.data.user.email, /@twini\.invalid$/);
+  assert.equal((await call('DELETE', `/admin/players/${admin.data.user.id}`, { token })).status, 422);
+});

@@ -1,13 +1,17 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { removeCredential, saveCredential, verifyCredential } from './credentialStore';
-import { cloudSignOut, linkCloudAccountInBackground } from '../../game/services/cloudAccount';
+import { clearSessionId, loadSessionId, saveSessionId } from './sessionStore';
+import { cloudGoogleSignIn, cloudSignOut, linkCloudAccountInBackground } from '../../game/services/cloudAccount';
 
 const USERS_KEY = '@twini/users/v1';
-const SESSION_KEY = '@twini/session/v1';
 const AuthContext = createContext(null);
-// Local demo account seeded on first launch. Its password is public in the source, so it is never linked to the cloud backend.
-const SEED_ADMIN = { email: 'dani.hd@idtc.org', password: 'Superadmin@88' };
+// Optional demo account for LOCAL DEVELOPMENT ONLY. A hardcoded password would ship inside the APK
+// bundle (anyone can decompile it), so it is read from the environment and only honoured in dev builds.
+// Set EXPO_PUBLIC_SEED_ADMIN_EMAIL / EXPO_PUBLIC_SEED_ADMIN_PASSWORD in .env.local when needed.
+const SEED_ADMIN = __DEV__ && process.env.EXPO_PUBLIC_SEED_ADMIN_EMAIL && process.env.EXPO_PUBLIC_SEED_ADMIN_PASSWORD
+  ? { email: process.env.EXPO_PUBLIC_SEED_ADMIN_EMAIL, password: process.env.EXPO_PUBLIC_SEED_ADMIN_PASSWORD }
+  : null;
 
 const normalizeEmail = (email) => email.trim().toLowerCase();
 const makeId = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
@@ -50,14 +54,19 @@ export function AuthProvider({ children }) {
     ;(async () => {
       try {
         const [sessionId, users] = await Promise.all([
-          AsyncStorage.getItem(SESSION_KEY),
+          loadSessionId(),
           readUsers(),
         ]);
         if (mounted && sessionId) setUser(users.find((item) => item.id === sessionId) || null);
-        // Register default admin user if no users exist
-        if (mounted && !users.length) {
-          await register({ fullName: 'Admin', email: SEED_ADMIN.email, organization: 'IDTC', industry: 'Digital Twin', country: 'Indonesia' }, SEED_ADMIN.password, { linkCloud: false });
-          setUser(users.find((item) => item.id === sessionId) || null);
+        // Dev-only convenience account: seeded from EXPO_PUBLIC_SEED_ADMIN_* and never in release builds.
+        if (mounted && !users.length && SEED_ADMIN) {
+          try {
+            await register(
+              { fullName: 'Admin', email: SEED_ADMIN.email, organization: 'IDTC', industry: 'Digital Twin', country: 'Indonesia' },
+              SEED_ADMIN.password,
+              { linkCloud: false },
+            );
+          } catch { /* ignore seeding failures: the user can still register manually */ }
         }
       } catch {
         if (mounted) setUser(null);
@@ -93,7 +102,7 @@ export function AuthProvider({ children }) {
     await saveCredential(nextUser.id, password);
     try {
       await writeUsers([...users, nextUser]);
-      await AsyncStorage.setItem(SESSION_KEY, nextUser.id);
+      await saveSessionId(nextUser.id);
     } catch (error) {
       await removeCredential(nextUser.id);
       throw error;
@@ -109,12 +118,33 @@ export function AuthProvider({ children }) {
     if (!password) throw new Error('Enter your password.');
     const users = await readUsers();
     const account = users.find((item) => normalizeEmail(item.email) === email);
+    if (account?.provider === 'google' && !(await verifyCredential(account.id, password))) {
+      throw new Error('Akun ini terdaftar dengan Google. Gunakan tombol "Masuk dengan Google".');
+    }
     if (!account || !(await verifyCredential(account.id, password))) {
       throw new Error('Email or password is incorrect.');
     }
-    await AsyncStorage.setItem(SESSION_KEY, account.id);
+    await saveSessionId(account.id);
     setUser(account);
-    if (!(email === SEED_ADMIN.email && password === SEED_ADMIN.password)) linkCloudAccountInBackground(email, password, account.fullName);
+    // The throw-away dev account must never reach the cloud backend with its env-provided password.
+    const isSeedAccount = SEED_ADMIN && email === normalizeEmail(SEED_ADMIN.email) && password === SEED_ADMIN.password;
+    if (!isSeedAccount) linkCloudAccountInBackground(email, password, account.fullName);
+    return account;
+  }, []);
+
+  // Google Sign-In (Gmail): the server validates the ID token, then a matching local profile is created or reused.
+  const signInWithGoogle = useCallback(async (idToken) => {
+    const session = await cloudGoogleSignIn(idToken);
+    const remote = session.user;
+    const email = normalizeEmail(remote.email);
+    const users = await readUsers();
+    const existing = users.find((item) => normalizeEmail(item.email) === email);
+    const account = existing
+      ? { ...existing, provider: existing.provider === 'google' ? 'google' : 'password+google', avatarUrl: remote.avatarUrl || existing.avatarUrl || null, cloudUserId: remote.id, updatedAt: new Date().toISOString() }
+      : { id: makeId(), fullName: remote.fullName || email.split('@')[0], email, organization: '', industry: '', country: 'Indonesia', provider: 'google', avatarUrl: remote.avatarUrl || null, cloudUserId: remote.id, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+    await writeUsers(existing ? users.map((item) => (item.id === account.id ? account : item)) : [...users, account]);
+    await saveSessionId(account.id);
+    setUser(account);
     return account;
   }, []);
 
@@ -152,7 +182,7 @@ export function AuthProvider({ children }) {
 
   const logout = useCallback(async () => {
     await cloudSignOut();
-    await AsyncStorage.removeItem(SESSION_KEY);
+    await clearSessionId();
     setUser(null);
   }, []);
 
@@ -163,7 +193,7 @@ export function AuthProvider({ children }) {
     const users = await readUsers();
     await writeUsers(users.filter((item) => item.id !== user.id));
     await removeCredential(user.id);
-    await AsyncStorage.removeItem(SESSION_KEY);
+    await clearSessionId();
     setUser(null);
   }, [user]);
 
@@ -172,11 +202,12 @@ export function AuthProvider({ children }) {
     isReady,
     register,
     login,
+    signInWithGoogle,
     updateProfile,
     changePassword,
     logout,
     deleteAccount,
-  }), [user, isReady, register, login, updateProfile, changePassword, logout, deleteAccount]);
+  }), [user, isReady, register, login, signInWithGoogle, updateProfile, changePassword, logout, deleteAccount]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

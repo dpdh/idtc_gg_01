@@ -165,6 +165,53 @@ const MIGRATIONS = [
       );
     `,
   },
+  {
+    version: 2,
+    name: 'user_management_google',
+    sql: `
+      ALTER TABLE users ADD COLUMN auth_provider TEXT NOT NULL DEFAULT 'password';
+      ALTER TABLE users ADD COLUMN google_sub TEXT;
+      ALTER TABLE users ADD COLUMN avatar_url TEXT;
+      ALTER TABLE users ADD COLUMN last_login_at TEXT;
+      ALTER TABLE users ADD COLUMN status_reason TEXT;
+      ALTER TABLE users ADD COLUMN updated_at TEXT;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_users_google_sub ON users(google_sub) WHERE google_sub IS NOT NULL;
+      CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+    `,
+  },
+  {
+    version: 3,
+    name: 'coop_rooms',
+    sql: `
+      CREATE TABLE coop_rooms (
+        id TEXT PRIMARY KEY,
+        code TEXT NOT NULL UNIQUE,
+        mission_id TEXT NOT NULL,
+        max_players INTEGER NOT NULL DEFAULT 4,
+        status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','completed','closed')),
+        objectives_json TEXT NOT NULL,
+        totals_json TEXT NOT NULL DEFAULT '[]',
+        reward_tp INTEGER NOT NULL DEFAULT 0,
+        reward_xp INTEGER NOT NULL DEFAULT 0,
+        created_by TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE coop_members (
+        room_id TEXT NOT NULL REFERENCES coop_rooms(id) ON DELETE CASCADE,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        name TEXT NOT NULL DEFAULT '',
+        discipline TEXT NOT NULL DEFAULT 'civil',
+        contribution INTEGER NOT NULL DEFAULT 0,
+        claimed INTEGER NOT NULL DEFAULT 0,
+        joined_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (room_id, user_id)
+      );
+      CREATE INDEX idx_coop_members_user ON coop_members(user_id);
+      CREATE INDEX idx_coop_rooms_status ON coop_rooms(status, updated_at);
+    `,
+  },
 ];
 
 const now = () => new Date().toISOString();
